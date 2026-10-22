@@ -76,7 +76,7 @@ partial:
 
 inference:
   run_dir: outputs/heads
-  store_dir: features/store_infer
+  store_dir: null                            # null = features.store_dir; images already encoded are reused
   out_dir: outputs/infer
   team: dino
   method: 1

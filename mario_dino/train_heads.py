@@ -151,50 +151,59 @@ def predict_task2(heads: MarioHeads, feats, t_rows, device, batch: int = 4096) -
 
 
 def fit(
-    heads: MarioHeads,
-    params,
+    module: torch.nn.Module,
+    opt: torch.optim.Optimizer,
     n_train: int,
     step_fn: Callable[[np.ndarray, torch.Tensor], tuple[torch.Tensor, dict]],
     eval_fn: Callable[[], tuple[float | None, dict]],
-    cfg: Config,
+    *,
+    batch_size: int,
+    max_epochs: int,
+    patience: int,
     gen: torch.Generator,
     tag: str,
+    n_views: int = N_VIEWS,
+    max_steps: int | None = None,
 ) -> tuple[dict, list[dict], int]:
-    """Train with AdamW + early stopping on ``eval_fn``'s value (higher is better).
+    """Minibatch training with early stopping on ``eval_fn``'s value (higher is better).
 
-    Returns (best state_dict, history, best epoch). If ``eval_fn`` returns None (no validation rows),
-    the last epoch is kept.
+    ``step_fn(idx, views)`` gets training indices and one sampled view per sample. Returns (best
+    ``module.state_dict()``, history, best epoch). If ``eval_fn`` returns None (no validation rows), the last
+    epoch is kept. ``max_steps`` caps optimiser steps (smoke tests).
     """
-    tc = cfg.train
-    opt = torch.optim.AdamW(params, lr=tc.lr, weight_decay=tc.weight_decay)
-    best_value, best_state, best_epoch, bad = -np.inf, copy.deepcopy(heads.state_dict()), 0, 0
+    best_value, best_state, best_epoch, bad = -np.inf, copy.deepcopy(module.state_dict()), 0, 0
+    steps = 0
     history = []
-    for epoch in range(1, tc.max_epochs + 1):
-        heads.train()
+    for epoch in range(1, max_epochs + 1):
+        module.train()
         perm = torch.randperm(n_train, generator=gen).numpy()
         sums: dict[str, float] = {}
         n_batches = 0
-        for s in range(0, n_train, tc.batch_size):
-            idx = perm[s : s + tc.batch_size]
-            views = torch.randint(0, N_VIEWS, (len(idx),), generator=gen)
+        for s in range(0, n_train, batch_size):
+            if max_steps is not None and steps >= max_steps:
+                break
+            idx = perm[s : s + batch_size]
+            views = torch.randint(0, n_views, (len(idx),), generator=gen)
             loss, parts = step_fn(idx, views)
             opt.zero_grad(set_to_none=True)
             loss.backward()
             opt.step()
+            steps += 1
             for k, v in parts.items():
                 sums[k] = sums.get(k, 0.0) + v
             n_batches += 1
+        module.eval()
         value, metrics = eval_fn()
         rec = {"epoch": epoch, **{f"train_{k}": v / max(n_batches, 1) for k, v in sums.items()}, **metrics}
         history.append(rec)
         if value is None or value > best_value:
             best_value = -np.inf if value is None else value
-            best_state, best_epoch, bad = copy.deepcopy(heads.state_dict()), epoch, 0
+            best_state, best_epoch, bad = copy.deepcopy(module.state_dict()), epoch, 0
         else:
             bad += 1
         log.info("%s epoch %d: %s", tag, epoch, ", ".join(f"{k}={v:.4f}" for k, v in rec.items()
                                                        if isinstance(v, float)))
-        if bad >= tc.patience:
+        if bad >= patience or (max_steps is not None and steps >= max_steps):
             break
     return best_state, history, best_epoch
 
@@ -262,7 +271,9 @@ def train_fold(
         logits = predict_task1(heads, feats, t1.t_rows[va1], t1.n_rows[va1], device)
         return _eval_value(t1.y[va1], logits, 1, tc.select_metric, w1.cpu())
 
-    state_a, hist_a, ep_a = fit(heads, heads.parameters(), len(tr1), step_a, eval_a, cfg, gen, f"fold{fold} A")
+    loop = dict(batch_size=tc.batch_size, max_epochs=tc.max_epochs, patience=tc.patience, gen=gen)
+    opt = torch.optim.AdamW(heads.parameters(), lr=tc.lr, weight_decay=tc.weight_decay)
+    state_a, hist_a, ep_a = fit(heads, opt, len(tr1), step_a, eval_a, tag=f"fold{fold} A", **loop)
     heads.load_state_dict(state_a)
     torch.save({"kind": "heads", "task": 1, "heads": state_a, "best_epoch": ep_a, **common},
                os.path.join(fold_dir, "task1.pt"))
@@ -293,8 +304,8 @@ def train_fold(
             logits = predict_task2(heads, feats, t2.t_rows[va2], device)
             return _eval_value(t2.y[va2], logits, 2, tc.select_metric, w2.cpu())
 
-        state_b, hist_b, ep_b = fit(heads, heads.parameters(), len(tr2), step_b, eval_b, cfg, gen,
-                                    f"fold{fold} B")
+        opt = torch.optim.AdamW(heads.parameters(), lr=tc.lr, weight_decay=tc.weight_decay)
+        state_b, hist_b, ep_b = fit(heads, opt, len(tr2), step_b, eval_b, tag=f"fold{fold} B", **loop)
         heads.load_state_dict(state_b)
         torch.save({"kind": "heads", "task": 2, "heads": state_b, "best_epoch": ep_b, **common},
                    os.path.join(fold_dir, "task2.pt"))

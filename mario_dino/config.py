@@ -99,7 +99,7 @@ class PartialCfg:
 @dataclass
 class InferenceCfg:
     run_dir: str = "outputs/heads"  # train_heads or train_partial output
-    store_dir: str = "features/store_infer"
+    store_dir: str | None = None  # None = features.store_dir (reuses features computed for training)
     out_dir: str = "outputs/infer"
     team: str = "dino"
     method: int = 1

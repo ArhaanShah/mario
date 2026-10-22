@@ -77,8 +77,16 @@ def extract_features(
     num_workers: int = 0,
     amp: bool = True,
     on_chunk: Callable[[int, int], None] | None = None,
+    encode_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
 ) -> dict:
-    """Encode every image in ``images`` whose row is not done yet. Returns counts."""
+    """Encode every image in ``images`` whose row is not done yet. Returns counts.
+
+    ``encode_fn`` maps a view-0 batch (B, 3, H, W) to rows (B, *store.row_shape); the default is the pooled
+    two-view vector. ``train_partial`` passes a token-prefix encoder to build its token cache.
+    """
+    if encode_fn is None:
+        def encode_fn(x):
+            return encode_views(encoder, x, device, amp)
     rows = store.ensure(images)
     pending = store.pending(np.unique(rows))
     stats = {"images": len(set(images)), "already_done": len(set(rows)) - len(pending), "encoded": 0}
@@ -102,9 +110,9 @@ def extract_features(
             num_workers=num_workers,
             pin_memory=device.type == "cuda",
         )
-        out = np.empty((len(chunk), N_VIEWS, encoder.out_dim), dtype=np.float32)
+        out = np.empty((len(chunk), *store.row_shape), dtype=np.float32)
         for idx, x in loader:
-            out[idx.numpy()] = encode_views(encoder, x, device, amp).numpy()
+            out[idx.numpy()] = encode_fn(x).numpy()
         store.write(chunk, out)
         store.mark_done(chunk)
         stats["encoded"] += len(chunk)
