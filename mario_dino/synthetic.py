@@ -23,18 +23,30 @@ TASK2_LABEL_P = np.array([351, 2821, 650], dtype=float) / 3822
 BSCAN_HEIGHT = 200
 
 
-def _bscan(rng: np.random.Generator, width: int) -> np.ndarray:
+def synthetic_bscan(rng: np.random.Generator, width: int) -> tuple[np.ndarray, np.ndarray]:
+    """A B-scan-like image and its true retina top (row per A-scan).
+
+    Dark vitreous above a curved inner retinal surface; continuous tissue below it with a bright inner layer,
+    a few horizontal bands, a bright outer band (RPE-like) and a fading choroid; speckle-like noise.
+    """
     y = np.arange(BSCAN_HEIGHT, dtype=np.float32)[:, None]
     x = np.linspace(-1, 1, width, dtype=np.float32)[None, :]
-    img = np.full((BSCAN_HEIGHT, width), 20.0, dtype=np.float32)
-    top = rng.uniform(50, 90)
-    curve = rng.uniform(-15, 15)
-    for _ in range(int(rng.integers(3, 7))):
-        centre = top + rng.uniform(0, 80) + curve * x**2
-        sigma = rng.uniform(1.5, 6.0)
-        img += rng.uniform(60, 180) * np.exp(-0.5 * ((y - centre) / sigma) ** 2)
-    img += rng.normal(0, 12, size=img.shape)
-    return np.clip(img, 0, 255).astype(np.uint8)
+    top = (rng.uniform(40, 80) + rng.uniform(-15, 15) * x**2 + rng.uniform(-5, 5) * x).astype(np.float32)
+    thickness = rng.uniform(60, 90)
+    depth = y - top  # rows below the inner surface
+    inside = 1.0 / (1.0 + np.exp(-depth / 1.5))  # soft surface edge
+    img = 20.0 + inside * rng.uniform(40, 60)
+    img += rng.uniform(60, 110) * np.exp(-0.5 * ((depth - 4) / 3.0) ** 2)  # bright inner layer
+    for _ in range(int(rng.integers(2, 5))):
+        img += rng.uniform(20, 60) * np.exp(-0.5 * ((depth - rng.uniform(15, thickness - 10)) / 3.0) ** 2)
+    img += rng.uniform(100, 160) * np.exp(-0.5 * ((depth - thickness) / 3.0) ** 2)  # RPE-like band
+    img -= np.clip((depth - thickness - 5) * 1.2, 0, None) * inside  # choroid fades with depth
+    img += rng.normal(0, 10, size=img.shape)
+    return np.clip(img, 0, 255).astype(np.uint8), np.round(top[0]).astype(np.int64)
+
+
+def _bscan(rng: np.random.Generator, width: int) -> np.ndarray:
+    return synthetic_bscan(rng, width)[0]
 
 
 def _name(rng: np.random.Generator, used: set[str]) -> str:

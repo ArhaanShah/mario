@@ -19,7 +19,9 @@ data:
   n_folds: 4
 
 preprocess:
-  mode: octip                                # octip | raw (raw = no OCTIP weights needed)
+  mode: classic                              # classic: weight-free retina localizer + DF41's OCTIP PreProcessor
+                                             # octip: DF41's OCTIP with the FPN weights (on request from the author)
+                                             # raw: original images
   cache_dir: cache                           # images land in cache/<mode>/<image>.png
   octip_weights_dir: weights/octip           # FPN_efficientnetb6_384x384.hdf5, FPN_efficientnetb7_320x320.hdf5
   octip_batch_size: 16

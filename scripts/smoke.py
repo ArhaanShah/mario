@@ -38,7 +38,7 @@ def main() -> None:
     run("scripts/fetch_weights.py", *c, "--random-init")
     run("scripts/check_label_alignment.py", *c)
     run("-m", "mario_dino.data.splits", *c)
-    run("-m", "mario_dino.octip_cache", *c, "--mode", "raw")
+    run("-m", "mario_dino.octip_cache", *c)  # preprocess.mode: classic
     run("-m", "mario_dino.features", *c)
     run("-m", "mario_dino.train_heads", *c)
     run("-m", "mario_dino.train_heads", *c, "--folds", "0", "--set", "model.forecaster=identity",

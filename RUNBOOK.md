@@ -11,12 +11,29 @@ forecaster and head, the folds and the ablations all run on CPU from cached feat
 
 Run every command from the repo root. Paths below are the defaults in `configs/base.yaml`.
 
+## Models and where they come from
+
+Every model the default pipeline needs is either public or not needed:
+
+| Model | Used for | Source | Access |
+| --- | --- | --- | --- |
+| DINOv2 ViT-B/14 with 4 registers (`vit_base_patch14_reg4_dinov2.lvd142m`) | frozen encoder | Hugging Face [`timm/vit_base_patch14_reg4_dinov2.lvd142m`](https://huggingface.co/timm/vit_base_patch14_reg4_dinov2.lvd142m) | public, not gated, Apache-2.0; `scripts/fetch_weights.py` downloads it once |
+| DINOv2 ViT-S/14 with 4 registers (`vit_small_patch14_reg4_dinov2.lvd142m`) | smaller-budget switch | Hugging Face [`timm/vit_small_patch14_reg4_dinov2.lvd142m`](https://huggingface.co/timm/vit_small_patch14_reg4_dinov2.lvd142m) | public, not gated, Apache-2.0 |
+| OCTIP retina localizers (`FPN_efficientnetb6_384x384.hdf5`, `FPN_efficientnetb7_320x320.hdf5`) | `--mode octip` only | by email request to the OCTIP author ([leto-atreides-2/octip](https://github.com/leto-atreides-2/octip)); DF41 does not ship them | **not needed**: `--mode classic` (the default) replaces them, see step 2 |
+| EfficientNet-B6/B7 ImageNet weights | `segmentation_models` asks for them when OCTIP builds its FPNs | GitHub releases | **not needed**: OCTIP's .hdf5 overwrites them, so `octip_cache` builds the FPNs with `encoder_weights=None` and stays offline |
+
+DF41's own checkpoints (ResNet50 fusion models, PPMAE) are not released and not used. The MARIO images and
+CSVs come from the challenge organisers.
+
+If the Hugging Face Hub is blocked, run `fetch_weights.py` anywhere with access and copy
+`weights/*.pth` and `weights/*.pth.json`, or point `HF_ENDPOINT` at a mirror.
+
 ---
 
 ## 0. Setup
 
 ```bash
-git clone --recursive <this repo> mario-dino && cd mario-dino
+git clone --recursive https://github.com/ArhaanShah/mario.git && cd mario
 git submodule update --init          # if cloned without --recursive; pins DF41 at 4d4a11b
 ```
 
@@ -29,7 +46,8 @@ pip install -r requirements/main.txt
 make test                            # CPU only; no GPU, network, MARIO data or OCTIP weights needed
 ```
 
-**OCTIP env** (optional; only for `--mode octip`), Python 3.10, CPU TensorFlow:
+**OCTIP env** (optional; only for `--mode octip`, which needs the on-request OCTIP weights), Python 3.10,
+CPU TensorFlow:
 
 ```bash
 python3.10 -m venv .venv-octip && source .venv-octip/bin/activate
@@ -66,24 +84,42 @@ python -m mario_dino.data.splits --config configs/base.yaml
 Smaller budget: set `encoder.name: vit_small_patch14_reg4_dinov2.lvd142m` and
 `encoder.weights: weights/vit_small_patch14_reg4_dinov2.lvd142m.pth`, then re-run `fetch_weights.py`.
 
-## 2. OCTIP cache (CPU, octip env)
+## 2. OCTIP preprocessing cache (CPU)
 
-Put `FPN_efficientnetb6_384x384.hdf5` and `FPN_efficientnetb7_320x320.hdf5` in `weights/octip/`, then:
+Default, no weights needed (main env):
+
+```bash
+python -m mario_dino.octip_cache --config configs/base.yaml        # preprocess.mode: classic
+```
+
+`classic` mode runs DF41's unmodified OCTIP `PreProcessor`, which flattens the retina, crops it to 200 rows,
+drops bad A-scans and normalises intensity. Its retina masks come from two learning-free localizers in
+`mario_dino/retina.py` instead of OCTIP's two FPN networks. The PreProcessor only uses each mask's top
+retina boundary per A-scan. It keeps an A-scan only when the two masks agree within 5 px, as it does with
+the FPN pair:
+
+- **threshold**: blur, then an Otsu threshold capped at background + 30% of the range, then largest
+  tissue components;
+- **gradient**: blur, then a vertical Sobel, then the first strong dark-to-bright edge.
+
+On synthetic B-scans with a known retina top (`tests/test_retina.py`) both land within 1–3 px. This
+says nothing yet about real Spectralis B-scans. Before step 3, spot-check a few `cache/classic/*.png`
+against the originals, and check `cache/classic/failures.csv` (images that fell back to raw).
+
+If you obtain the OCTIP weights, put `FPN_efficientnetb6_384x384.hdf5` and `FPN_efficientnetb7_320x320.hdf5`
+in `weights/octip/`, set `preprocess.mode: octip` in `configs/base.yaml`, and run in the octip env:
 
 ```bash
 source .venv-octip/bin/activate
 python -m mario_dino.octip_cache --config configs/base.yaml --mode octip
 ```
 
-Without the OCTIP weights, set `preprocess.mode: raw` in `configs/base.yaml` and run (in either env):
+To skip preprocessing entirely, set `preprocess.mode: raw` (originals are copied).
 
-```bash
-python -m mario_dino.octip_cache --config configs/base.yaml --mode raw
-```
-
-The rest of the pipeline reads `preprocess.mode` from the config, so keep it the same for steps 3–6. The step
-is idempotent: it skips images already cached. Images where OCTIP's PreProcessor fails are cached raw,
-as DF41 does, and listed in `cache/<mode>/failures.csv`; check that file.
+The rest of the pipeline reads `preprocess.mode` from the config, so keep it the same for steps 3–6. The
+feature store records the mode and refuses to mix modes. The step is idempotent: it skips images already
+cached. Images where the PreProcessor fails, or keeps under 25% of the A-scans, are cached raw, as DF41
+does, and listed in `cache/<mode>/failures.csv`.
 
 ## 3. Feature extraction (GPU, the only mandatory GPU job)
 
@@ -160,7 +196,8 @@ Docker (CPU; both envs in one image; weights and trained heads copied in; no net
 python scripts/fetch_weights.py --config configs/base.yaml      # weights/ must exist before building
 docker build -f docker/Dockerfile -t mario-dino --build-arg GIT_COMMIT=$(git rev-parse HEAD) .
 # mounting cache/ and features/ lets the Task 2 run reuse what the Task 1 run (or step 3) computed
-MOUNTS="-v $PWD/data:/app/data -v $PWD/weights/octip:/app/weights/octip -v $PWD/cache:/app/cache \
+# (add -v $PWD/weights/octip:/app/weights/octip only for preprocess.mode: octip)
+MOUNTS="-v $PWD/data:/app/data -v $PWD/cache:/app/cache \
         -v $PWD/features:/app/features -v $PWD/outputs/infer:/app/outputs/infer"
 docker run --rm --network none $MOUNTS mario-dino --config configs/task1.yaml --task 1 --out-dir outputs/infer
 docker run --rm --network none $MOUNTS mario-dino --config configs/task2.yaml --task 2 --out-dir outputs/infer
@@ -200,7 +237,8 @@ Run on CPU (Windows, Python 3.12, torch 2.14.1+cpu, timm 1.0.30):
 Not run, by design or for lack of assets:
 
 - Pretrained weight download (`fetch_weights.py` without `--random-init`): left for the GPU machine.
-- `--mode octip`: no OCTIP weight files and no TensorFlow env here.
+- `--mode octip`: no OCTIP weight files (request-only) and no TensorFlow env here. `--mode classic` was
+  run (tests and smoke), but only on synthetic B-scans, never on real OCT.
 - Any GPU step, and anything on real MARIO data. No metrics on real data exist in this repo.
 - `docker build` (downloads ~2 GB of TensorFlow + torch wheels) and the in-image run.
 - A Python 3.10 interpreter: code targets 3.10 (ruff `target-version = "py310"`) but was executed on 3.12.
@@ -216,6 +254,9 @@ Not run, by design or for lack of assets:
   in step 3 (via `data.extra_csvs`) are not encoded again at inference. The store appends new images.
 - **Task 2 auxiliary loss** (`task2_aux_from_task1_pairs`, off by default): forecasts each Task 1 pair at its
   own `delta_t`, not at Δt₀.
+- **`classic` preprocessing mode (new, default)**: OCTIP's localizer weights are request-only, so two
+  learning-free localizers stand in for them in front of DF41's own PreProcessor (step 2). `octip` mode is
+  unchanged apart from building its FPNs without the ImageNet download.
 - **Partial fine-tune inference**: fold checkpoints carry their own encoder suffix, so `infer.py` runs the
   shared prefix once per image and view and each fold's suffix on top.
 
@@ -226,8 +267,9 @@ Not run, by design or for lack of assets:
 - [ ] Class names for indices 0–3. `class_names` in `configs/base.yaml` holds the usual MARIO reading
       (reduced, stable, worsened, other), unconfirmed. Code uses indices only.
 - [ ] Task 2 label definition, given only 56% agreement with the Task 1 label of the same starting image.
-- [ ] Where to get the two OCTIP weight files (OCTIP README: author's Dropbox; DF41 README links
-      leto-atreides-2/octip).
+- [ ] Optional: request the two OCTIP weight files from the OCTIP author (gwenole.quellec@inserm.fr, per
+      [leto-atreides-2/octip](https://github.com/leto-atreides-2/octip)) to compare `octip` against `classic`.
+      Not needed to run anything.
 - [ ] Whether the challenge rules allow DINOv2's public pretrained weights.
 
 ## Code map
@@ -237,7 +279,8 @@ Not run, by design or for lack of assets:
 | `mario_dino/config.py` | YAML → dataclasses; `base:` inheritance, `--set` overrides, unknown keys rejected |
 | `mario_dino/data/schema.py` | DF41 column sets, CSV/dtype/image validation |
 | `mario_dino/data/splits.py` | GroupKFold(4) on `id_patient` over Task 1 ∪ Task 2 → `splits.json` |
-| `mario_dino/octip_cache.py` | CLI: batched OCTIP (`octip`) or copy (`raw`) → `cache/<mode>/` |
+| `mario_dino/octip_cache.py` | CLI: `classic`, batched OCTIP (`octip`) or copy (`raw`) → `cache/<mode>/` |
+| `mario_dino/retina.py` | weight-free retina localizers + DF41's OCTIP PreProcessor loaded without TensorFlow |
 | `mario_dino/data/images.py` | resize 518×196, min-max, 3 channels, ImageNet norm, views 0/1 |
 | `mario_dino/models/encoder.py` | timm DINOv2 from local weights; CLS + mean-patch pooling; prefix/suffix split |
 | `mario_dino/store.py` | append-only resumable memmap store (features and token caches) |

@@ -12,7 +12,7 @@ data:
   splits: smoke_out/splits.json
 
 preprocess:
-  mode: raw
+  mode: classic                      # weight-free retina localizer + DF41's OCTIP PreProcessor
   cache_dir: smoke_out/cache
 
 encoder:

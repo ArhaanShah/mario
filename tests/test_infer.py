@@ -33,6 +33,7 @@ def pipeline(synth, tmp_path_factory):
             f"data.extra_csvs=[{c['task1_val']}, {c['task2_val']}]",
             f"data.splits={tmp / 'splits.json'}",
             f"preprocess.cache_dir={tmp / 'cache'}",
+            "preprocess.mode=raw",
             f"encoder.weights={tmp / 'enc.pth'}",
             "encoder.img_size=[42, 112]",
             f"features.store_dir={tmp / 'store'}",

@@ -1,5 +1,7 @@
 """OCTIP preprocessing cache: unique images from the CSVs -> ``<cache_dir>/<mode>/<image>.png``.
 
+* ``--mode classic`` (default) runs DF41's OCTIP PreProcessor on masks from two learning-free retina
+  localizers (``mario_dino.retina``). Needs no weights and no TensorFlow; runs in the main env.
 * ``--mode octip`` runs DF41's OCTIP (two FPN retina localizers + PreProcessor). It needs the octip env
   (TensorFlow 2.10, segmentation_models 1.0.1) and the two weight files. Localizers run in batches over many
   paths instead of DF41's per-sample calls. If PreProcessor fails on an image, the raw image is cached
@@ -12,7 +14,9 @@ Existing cache files are skipped, so the step is idempotent and resumable. Failu
 
 from __future__ import annotations
 
+import contextlib
 import csv
+import functools
 import os
 import shutil
 import sys
@@ -24,6 +28,7 @@ import numpy as np
 import pandas as pd
 
 from .cli import base_parser, load_from_args
+from .config import MODES
 from .data import schema
 from .utils import THIRD_PARTY, get_logger, write_provenance
 
@@ -71,6 +76,37 @@ def _import_octip(third_party: str = THIRD_PARTY):
     return RetinaLocalizer, RetinaLocalizationDataset, PreProcessor
 
 
+@contextlib.contextmanager
+def _no_imagenet_download():
+    """Build OCTIP's FPN models with ``encoder_weights=None``.
+
+    RetinaLocalizer asks segmentation_models for ImageNet encoder weights (a download from GitHub) and then
+    overwrites every weight with the .hdf5 file, so skipping the download changes nothing and keeps the
+    step offline. DF41's code is not edited: ``sm.FPN`` is wrapped for the duration of construction.
+    """
+    import segmentation_models as sm
+
+    original = sm.FPN
+
+    @functools.wraps(original)
+    def fpn(*args, **kwargs):
+        kwargs["encoder_weights"] = None
+        return original(*args, **kwargs)
+
+    sm.FPN = fpn
+    try:
+        yield
+    finally:
+        sm.FPN = original
+
+
+def check_flattened(img: np.ndarray, min_valid_fraction: float = 0.25) -> None:
+    """Raise if PreProcessor kept too few A-scans (an almost black image is worse than the raw B-scan)."""
+    frac = float((img > 0).any(axis=0).mean()) if img.size else 0.0
+    if frac < min_valid_fraction:
+        raise ValueError(f"only {frac:.0%} of A-scans kept by PreProcessor")
+
+
 def _seg_to_u8(seg: np.ndarray) -> np.ndarray:
     seg = np.asarray(seg)
     if seg.ndim == 4:
@@ -90,8 +126,9 @@ class OctipBackend:
             )
         RetinaLocalizer, self._Dataset, PreProcessor = _import_octip(third_party)
         self.batch_size = batch_size
-        self.loc1 = RetinaLocalizer("FPN", "efficientnetb6", (384, 384), model_directory=weights_dir)
-        self.loc2 = RetinaLocalizer("FPN", "efficientnetb7", (320, 320), model_directory=weights_dir)
+        with _no_imagenet_download():
+            self.loc1 = RetinaLocalizer("FPN", "efficientnetb6", (384, 384), model_directory=weights_dir)
+            self.loc2 = RetinaLocalizer("FPN", "efficientnetb7", (320, 320), model_directory=weights_dir)
         self.pre = PreProcessor(200, min_height=100, normalize_intensities=True)
 
     def segment(self, paths: list[str]) -> tuple[np.ndarray, np.ndarray]:
@@ -121,7 +158,9 @@ class OctipBackend:
                     results[i] = (raws[i], [("localizer", repr(e1), "raw_fallback")])
         for i, (a, b) in segs.items():
             try:
-                results[i] = (np.asarray(self.pre(paths[i], [a, b], output_directory=""), np.uint8), [])
+                img = np.asarray(self.pre(paths[i], [a, b], output_directory=""), np.uint8)
+                check_flattened(img)
+                results[i] = (img, [])
             except Exception as e:
                 results[i] = (raws[i], [("preprocessor", repr(e), "raw_fallback")])
         return results
@@ -168,8 +207,8 @@ def build_cache(
     backend_factory: Callable[[], OctipBackend] | None = None,
 ) -> dict:
     """Cache every image not already cached; returns counts."""
-    if mode not in ("octip", "raw"):
-        raise ValueError(f"mode must be octip or raw, got {mode!r}")
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     out_dir = os.path.join(cache_dir, mode)
     os.makedirs(out_dir, exist_ok=True)
     failures_csv = os.path.join(out_dir, "failures.csv")
@@ -195,7 +234,14 @@ def build_cache(
         _append_failures(failures_csv, fails)
         return stats
 
-    backend = backend_factory() if backend_factory else OctipBackend(weights_dir or "", batch_size)
+    if backend_factory:
+        backend = backend_factory()
+    elif mode == "classic":
+        from .retina import ClassicBackend
+
+        backend = ClassicBackend()
+    else:
+        backend = OctipBackend(weights_dir or "", batch_size)
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
         results = backend.process([schema.image_path(image_root, im) for im in batch])
@@ -210,13 +256,13 @@ def build_cache(
             stats["written"] += 1
             stats["fallback"] += int(bool(notes))
         _append_failures(failures_csv, fails)
-        log.info("octip cache: %d / %d", min(start + batch_size, len(pending)), len(pending))
+        log.info("%s cache: %d / %d", mode, min(start + batch_size, len(pending)), len(pending))
     return stats
 
 
 def main(argv: list[str] | None = None) -> None:
     p = base_parser(__doc__.splitlines()[0])
-    p.add_argument("--mode", choices=["octip", "raw"], default=None, help="overrides preprocess.mode")
+    p.add_argument("--mode", choices=list(MODES), default=None, help="overrides preprocess.mode")
     p.add_argument("--csv", action="append", default=None,
                    help="CSV(s) to take images from (default: all training + extra CSVs in the config)")
     p.add_argument("--batch-size", type=int, default=None, help="localizer batch (paths per call)")

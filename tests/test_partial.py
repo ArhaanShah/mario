@@ -23,6 +23,7 @@ def setup(synth, tmp_path):
         [
             f"data.image_root={synth['images']}",
             f"preprocess.cache_dir={tmp_path / 'cache'}",
+            "preprocess.mode=raw",
             f"encoder.weights={tmp_path / 'vits.pth'}",
             "encoder.img_size=[28, 56]",
             "encoder.kwargs={}",  # full 12-block ViT-S, random init

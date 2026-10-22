@@ -16,6 +16,10 @@ from typing import Any
 
 import yaml
 
+# octip: DF41's OCTIP (FPN localizers, weights on request) | classic: weight-free localizers + OCTIP
+# PreProcessor | raw: original images
+MODES = ("octip", "classic", "raw")
+
 
 @dataclass
 class DataCfg:
@@ -30,7 +34,7 @@ class DataCfg:
 
 @dataclass
 class PreprocessCfg:
-    mode: str = "raw"  # octip | raw
+    mode: str = "classic"  # octip | classic | raw
     cache_dir: str = "cache"
     octip_weights_dir: str = "weights/octip"
     octip_batch_size: int = 16
@@ -246,8 +250,8 @@ def config_to_dict(cfg: Config) -> dict:
 
 
 def validate(cfg: Config) -> None:
-    if cfg.preprocess.mode not in ("octip", "raw"):
-        raise ConfigError(f"preprocess.mode must be octip or raw, got {cfg.preprocess.mode!r}")
+    if cfg.preprocess.mode not in MODES:
+        raise ConfigError(f"preprocess.mode must be one of {MODES}, got {cfg.preprocess.mode!r}")
     h, w = cfg.encoder.img_size
     if h % 14 or w % 14:
         raise ConfigError(f"encoder.img_size {cfg.encoder.img_size} must be multiples of the patch size 14")
