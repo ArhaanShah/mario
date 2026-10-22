@@ -51,11 +51,13 @@ def make_synthetic_dataset(
     n_patients: int = 12,
     n_heldout_patients: int = 3,
     bscans_per_visit: int = 3,
+    write_images: bool = True,
 ) -> dict[str, str]:
     """Write images and CSVs under ``out_dir``; returns {name: path} of the CSVs.
 
     Training patients go to ``df_task{1,2}_train.csv``. Held-out patients go to ``df_task{1,2}_val.csv``
-    (with labels) and ``df_task{1,2}_test.csv`` (same rows, no ``label`` column).
+    (with labels) and ``df_task{1,2}_test.csv`` (same rows, no ``label`` column). ``write_images=False``
+    writes the CSVs only (for training on a synthetic feature store).
     """
     rng = np.random.default_rng(seed)
     img_dir = os.path.join(out_dir, "images")
@@ -65,7 +67,8 @@ def make_synthetic_dataset(
     used: set[str] = set()
 
     def write(name: str, img: np.ndarray) -> None:
-        cv2.imwrite(os.path.join(img_dir, name), img)
+        if write_images:
+            cv2.imwrite(os.path.join(img_dir, name), img)
 
     rows1: dict[str, list[dict]] = {"train": [], "val": []}
     rows2: dict[str, list[dict]] = {"train": [], "val": []}
@@ -153,6 +156,47 @@ def make_synthetic_dataset(
                 paths["task2_test"], index=False, lineterminator="\n"
             )
     return paths
+
+
+def make_planted_feature_store(
+    root: str,
+    task1: pd.DataFrame,
+    task2: pd.DataFrame | None = None,
+    dim: int = 64,
+    signal: float = 2.0,
+    noise: float = 1.0,
+    seed: int = 0,
+    dtype: str = "float32",
+):
+    """A FeatureStore whose Task 1 label is planted in the direction of f_next - f_t.
+
+    Pairs are walked in visit order so that f_next of one pair is f_t of the next; f_next = f_t +
+    signal * u_label + noise. View 1 is view 0 plus small noise. Task 2 labels carry no planted signal.
+    """
+    from .data.schema import unique_images
+    from .store import FeatureStore
+
+    rng = np.random.default_rng(seed)
+    u = rng.normal(size=(4, dim))
+    u /= np.linalg.norm(u, axis=1, keepdims=True)
+    f: dict[str, np.ndarray] = {}
+    order = task1.sort_values(["id_patient", "side_eye", "BScan", "num_current_visit_at_i"])
+    for a, b, y in zip(order["image_at_ti"], order["image_at_ti+1"], order["label"]):
+        if a not in f:
+            f[a] = rng.normal(size=dim)
+        f[b] = f[a] + signal * u[int(y)] + noise * rng.normal(size=dim)
+    dfs = [(1, task1)] + ([(2, task2)] if task2 is not None else [])
+    images = unique_images(dfs)
+    for im in images:
+        if im not in f:
+            f[im] = rng.normal(size=dim)
+    store = FeatureStore(root, (2, dim), dtype, identity={"synthetic": "planted", "seed": seed, "dim": dim})
+    rows = store.ensure(images)
+    v0 = np.stack([f[im] for im in images])
+    v1 = v0 + 0.05 * rng.normal(size=v0.shape)
+    store.write(rows, np.stack([v0, v1], axis=1))
+    store.mark_done(rows)
+    return store
 
 
 def main(argv: list[str] | None = None) -> None:

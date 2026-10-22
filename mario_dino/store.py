@@ -71,6 +71,20 @@ class FeatureStore:
         self._mm: np.memmap | None = None
         self._resize_file(len(self.images))
 
+    @classmethod
+    def open_existing(cls, root: str) -> FeatureStore:
+        """Open a store with whatever row shape, dtype and identity it was built with (read-side use)."""
+        meta_path = os.path.join(root, META_FILE)
+        if not os.path.isfile(meta_path):
+            raise FileNotFoundError(f"no feature store at {root!r}; run python -m mario_dino.features first")
+        with open(meta_path, encoding="utf-8") as f:
+            meta = json.load(f)
+        return cls(root, meta["row_shape"], meta["dtype"], meta["identity"])
+
+    @property
+    def meta(self) -> dict:
+        return {"row_shape": list(self.row_shape), "dtype": self.dtype.name, "identity": self.identity}
+
     # ---- layout -------------------------------------------------------------------------------
     @property
     def row_bytes(self) -> int:
