@@ -11,6 +11,10 @@ forecaster and head, the folds and the ablations all run on CPU from cached feat
 
 Run every command from the repo root. Paths below are the defaults in `configs/base.yaml`.
 
+The design rationale (GPU budget, DF41 facts, milestones) is in
+[docs/implementation-plan.md](docs/implementation-plan.md), kept as written. Where the code departs from it
+is listed under [Deviations from the plan](#deviations-from-the-plan-and-why) below.
+
 ## Models and where they come from
 
 Every model the default pipeline needs is either public or not needed:
@@ -225,10 +229,9 @@ installed in the same env.
 
 Run on CPU (Windows, Python 3.12, torch 2.14.1+cpu, timm 1.0.30):
 
-- `pytest`: all tests pass except `test_octip_mode_real_weights`, which skips (no OCTIP weights or
-  TensorFlow).
-- `scripts/smoke.py`: the full pipeline on synthetic data, including partial fine-tune and inference for
-  both tasks.
+- `pytest`: 60 passed, 1 skipped (`test_octip_mode_real_weights`: no OCTIP weights or TensorFlow).
+- `scripts/smoke.py`: the full pipeline on synthetic data with `classic` preprocessing, including partial
+  fine-tune and inference for both tasks (0 images fell back to raw).
 - `ruff check` (target py310).
 - `uv pip compile` of `requirements/{main,octip,docker}.txt` for Python 3.10 / manylinux x86_64. All three
   resolve (`requirements/*.lock.txt`).
@@ -245,6 +248,8 @@ Not run, by design or for lack of assets:
 
 ## Deviations from the plan, and why
 
+Relative to [docs/implementation-plan.md](docs/implementation-plan.md):
+
 - **OCTIP env opencv pin**: DF41 pins `opencv-python==4.4.0.42`, which has no Python 3.10 wheel. Uses
   `opencv-python-headless==4.10.0.84`, the newest release that still supports numpy 1.x, as TF 2.10 needs.
 - **DF41 scoring import**: DF41's `utils/scoring.py` imports seaborn, matplotlib and torchvision for
@@ -257,6 +262,10 @@ Not run, by design or for lack of assets:
 - **`classic` preprocessing mode (new, default)**: OCTIP's localizer weights are request-only, so two
   learning-free localizers stand in for them in front of DF41's own PreProcessor (step 2). `octip` mode is
   unchanged apart from building its FPNs without the ImageNet download.
+- **Synthetic B-scans**: the plan asked for horizontal bands plus noise. Those bands dropped back to vitreous
+  darkness between layers, which no real B-scan does and which broke retina localization. They now have
+  continuous tissue below a curved retinal surface, with layered bands inside, an RPE-like band and a fading
+  choroid. `synthetic_bscan` also returns the true retina top that the localizer tests check against.
 - **Partial fine-tune inference**: fold checkpoints carry their own encoder suffix, so `infer.py` runs the
   shared prefix once per image and view and each fold's suffix on top.
 
