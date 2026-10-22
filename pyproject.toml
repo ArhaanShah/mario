@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mario-dino"
+version = "0.1.0"
+description = "MARIO Tasks 1-2: frozen DINOv2 features, a GRU feature forecaster and a shared fusion head."
+readme = "RUNBOOK.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+# Main env: never imports TensorFlow. Exact pins live in requirements/main.txt.
+main = [
+    "torch>=2.1",
+    "timm==1.0.30",
+    "numpy",
+    "pandas",
+    "scikit-learn>=1.2",
+    "opencv-python-headless",
+    "pyyaml",
+    "pytest",
+]
+# OCTIP env: DF41's pins with tensorflow-cpu in place of tensorflow. See requirements/octip.txt.
+octip = [
+    "tensorflow-cpu==2.10.0",
+    "segmentation_models==1.0.1",
+    "numpy==1.24.2",
+    "opencv-python-headless==4.10.0.84",
+    "scipy",
+    "scikit-learn",
+    "pandas",
+    "pyyaml",
+]
+dev = ["ruff"]
+
+[tool.setuptools.packages.find]
+include = ["mario_dino*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+pythonpath = ["."]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 110
+extend-exclude = ["third_party"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
+ignore = ["E501", "B905"]

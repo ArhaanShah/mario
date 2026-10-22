@@ -1,0 +1,7 @@
+# Task 2 inference on the challenge test CSV (labels optional). Shares the inference feature store with
+# Task 1, so Task 2 images already encoded for Task 1 are not encoded again.
+base: base.yaml
+
+inference:
+  task2_csv: data/csv/df_task2_test_challenge.csv
+  out_dir: outputs/infer_task2

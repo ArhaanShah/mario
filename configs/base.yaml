@@ -1,0 +1,85 @@
+# Base config for real MARIO data. Paths are relative to the repo root (run every CLI from there).
+seed: 0
+device: auto
+
+# Code uses class indices only; names are for reports.
+# UNCONFIRMED: the usual MARIO reading is below - check it on the challenge page (RUNBOOK open questions).
+class_names:
+  task1: [reduced, stable, worsened, other]
+  task2: [reduced, stable, worsened]
+
+data:
+  image_root: data/images                    # B-scan PNGs; CSV image names are joined onto this
+  task1_train_csvs: [data/csv/df_task1_train_challenge.csv]
+  task2_train_csvs: [data/csv/df_task2_train_challenge.csv]
+  extra_csvs:                                # cached and encoded too, so inference reuses the features
+    - data/csv/df_task1_val_challenge.csv
+    - data/csv/df_task2_val_challenge.csv
+  splits: outputs/splits.json
+  n_folds: 4
+
+preprocess:
+  mode: octip                                # octip | raw (raw = no OCTIP weights needed)
+  cache_dir: cache                           # images land in cache/<mode>/<image>.png
+  octip_weights_dir: weights/octip           # FPN_efficientnetb6_384x384.hdf5, FPN_efficientnetb7_320x320.hdf5
+  octip_batch_size: 16
+
+encoder:
+  name: vit_base_patch14_reg4_dinov2.lvd142m # switch: vit_small_patch14_reg4_dinov2.lvd142m
+  weights: weights/vit_base_patch14_reg4_dinov2.lvd142m.pth
+  img_size: [196, 518]                       # H, W -> 14 x 37 = 518 patch tokens + 5 prefix tokens
+  kwargs: {}
+
+features:
+  store_dir: features/store
+  dtype: float16
+  batch_size: 64
+  chunk_size: 1024
+  num_workers: 4
+  amp: true
+
+model:
+  head_input: pair                           # ablation: ft_only
+  forecaster: gru                            # ablation: identity
+  hidden: 512
+  dt_dim: 64
+  dropout: 0.2
+  forecast_steps: 1
+
+train:
+  out_dir: outputs/heads
+  folds: null                                # null = all folds
+  batch_size: 256
+  max_epochs: 50
+  patience: 8
+  lr: 1.0e-3
+  weight_decay: 1.0e-4
+  lambda_pred: 1.0                           # ablation: 0
+  select_metric: mcc
+  task2_aux_from_task1_pairs: false          # enable only if check_label_alignment shows high agreement
+  delta_t0: null                             # Task 2 horizon; null = training-fold median delta_t
+
+partial:
+  n_blocks: 2
+  lr_blocks: 1.0e-5
+  lr_heads: 1.0e-4
+  weight_decay: 1.0e-4
+  token_store_dir: features/tokens
+  token_views: [0]
+  token_chunk_size: 256
+  batch_size: 32
+  max_epochs: 10
+  patience: 3
+  max_steps: null
+  out_dir: outputs/partial
+  init_heads_from: outputs/heads
+
+inference:
+  run_dir: outputs/heads
+  store_dir: features/store_infer
+  out_dir: outputs/infer
+  team: dino
+  method: 1
+  task1_csv: data/csv/df_task1_val_challenge.csv
+  task2_csv: data/csv/df_task2_val_challenge.csv
+  batch_size: 64

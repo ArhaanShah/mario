@@ -1,0 +1,6 @@
+# Task 1 inference on the challenge test CSV (labels optional). Training both stages uses base.yaml.
+base: base.yaml
+
+inference:
+  task1_csv: data/csv/df_task1_test_challenge.csv
+  out_dir: outputs/infer_task1

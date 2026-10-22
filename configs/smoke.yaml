@@ -1,0 +1,54 @@
+# End-to-end smoke run on synthetic data (scripts/smoke.py). CPU only, no network, random-init encoder.
+base: base.yaml
+device: cpu
+
+data:
+  image_root: smoke_out/data/images
+  task1_train_csvs: [smoke_out/data/csv/df_task1_train.csv]
+  task2_train_csvs: [smoke_out/data/csv/df_task2_train.csv]
+  extra_csvs:
+    - smoke_out/data/csv/df_task1_val.csv
+    - smoke_out/data/csv/df_task2_val.csv
+  splits: smoke_out/splits.json
+
+preprocess:
+  mode: raw
+  cache_dir: smoke_out/cache
+
+encoder:
+  name: vit_small_patch14_reg4_dinov2
+  weights: smoke_out/weights/vit_small_patch14_reg4_dinov2_random.pth  # written by fetch_weights.py --random-init
+  kwargs: {depth: 2}
+
+features:
+  store_dir: smoke_out/features/store
+  batch_size: 8
+  chunk_size: 16
+  num_workers: 0
+
+model:
+  hidden: 64
+  dt_dim: 16
+
+train:
+  out_dir: smoke_out/heads
+  batch_size: 64
+  max_epochs: 4
+  patience: 2
+
+partial:
+  n_blocks: 1
+  token_store_dir: smoke_out/features/tokens
+  batch_size: 4
+  max_epochs: 1
+  max_steps: 2
+  out_dir: smoke_out/partial
+  init_heads_from: smoke_out/heads
+
+inference:
+  run_dir: smoke_out/heads
+  store_dir: smoke_out/features/store_infer
+  out_dir: smoke_out/infer
+  task1_csv: smoke_out/data/csv/df_task1_test.csv
+  task2_csv: smoke_out/data/csv/df_task2_test.csv
+  batch_size: 8

@@ -1,0 +1,3 @@
+[submodule "third_party/mario_challenge_code"]
+	path = third_party/mario_challenge_code
+	url = https://github.com/pzhangwj/mario_challenge_code.git
