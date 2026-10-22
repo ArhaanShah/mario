@@ -83,7 +83,8 @@ def git_commit(path: str = REPO_ROOT) -> str | None:
         ).stdout.strip()
         return commit + ("-dirty" if dirty else "")
     except (OSError, subprocess.SubprocessError):
-        return None
+        # no git (e.g. the Docker image): the build passes the commit in
+        return os.environ.get("MARIO_DINO_GIT_COMMIT")
 
 
 def package_versions() -> dict[str, str]:

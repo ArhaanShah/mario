@@ -46,3 +46,12 @@ def test_config_rejects_unknown_key(tmp_path):
     p.write_text("train:\n  learning_rate: 0.1\n")
     with pytest.raises(ConfigError, match="unknown key"):
         load_config(str(p))
+
+
+def test_octip_side_modules_do_not_need_torch():
+    # the octip env (TensorFlow 2.10) has no torch: octip_cache and splits must not import it
+    code = (
+        "import sys, mario_dino.octip_cache, mario_dino.data.splits\n"
+        "assert 'torch' not in sys.modules and 'timm' not in sys.modules\n"
+    )
+    subprocess.run([sys.executable, "-c", code], cwd=REPO_ROOT, check=True)

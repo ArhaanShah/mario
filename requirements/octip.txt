@@ -1,0 +1,12 @@
+# OCTIP env (Python 3.10), CPU TensorFlow. DF41's pins with tensorflow-cpu in place of tensorflow.
+# DF41 pins opencv-python==4.4.0.42, which has no Python 3.10 wheel; 4.10.0.84 is the newest opencv
+# that still supports numpy 1.x.
+# If segmentation_models fails to import, set SM_FRAMEWORK=tf.keras (octip_cache.py does this itself).
+tensorflow-cpu==2.10.0
+segmentation_models==1.0.1
+numpy==1.24.2
+opencv-python-headless==4.10.0.84
+scipy<1.12
+scikit-learn<1.6
+pandas<2.3
+PyYAML>=6.0

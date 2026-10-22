@@ -1,0 +1,16 @@
+# Keep the build context to code, configs, third_party, weights and trained heads.
+.git
+**/.git
+.venv
+**/__pycache__
+.pytest_cache
+.ruff_cache
+data
+cache
+features
+smoke_out
+outputs/*
+!outputs/heads
+!outputs/partial
+third_party/mario_challenge_code/images
+third_party/mario_challenge_code/notebooks
