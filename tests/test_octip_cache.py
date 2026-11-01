@@ -23,6 +23,28 @@ def test_collect_images_unique_over_tasks(synth):
     assert imgs == sorted(set(t1["image_at_ti"]) | set(t1["image_at_ti+1"]))
 
 
+def test_collect_images_skips_rows_with_unreadable_scans(synth, tmp_path):
+    import cv2
+
+    df = pd.read_csv(synth["csv"]["task1_train"])
+    bad_image = df.iloc[0]["image_at_ti+1"]
+    (tmp_path / bad_image).write_bytes(b"not a readable image")
+    image_root = str(tmp_path)
+    for column in ("image_at_ti", "image_at_ti+1"):
+        for image in df[column].unique():
+            source = os.path.join(synth["images"], image)
+            destination = os.path.join(image_root, image)
+            if image != bad_image:
+                shutil.copyfile(source, destination)
+    csv_path = str(tmp_path / "task1.csv")
+    df.to_csv(csv_path, index=False)
+
+    images = collect_images([csv_path], image_root)
+
+    assert bad_image not in images
+    assert all(cv2.imread(os.path.join(image_root, image), cv2.IMREAD_GRAYSCALE) is not None for image in images)
+
+
 def test_raw_mode_copies_and_skips_existing(synth, tmp_path):
     imgs = _images(synth, 6)
     cache = str(tmp_path / "cache")

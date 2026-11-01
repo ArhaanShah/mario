@@ -22,6 +22,18 @@ make smoke     # the whole pipeline end to end on synthetic data with a small ra
 
 No `make` (e.g. Windows): `python -m pytest -q` and `python scripts/smoke.py`.
 
+## Interactive training dashboard
+
+Open [notebooks/mario_training_dashboard.ipynb](notebooks/mario_training_dashboard.ipynb) for the complete
+Task 1 + Task 2 workflow. It previews source B-scans and generated OCTIP/cache views, then trains both stages
+from the feature store with a live update after every validation epoch. Each run also writes
+`training_progress.jsonl` line by line to `train.out_dir`; every line records the fold, stage, epoch, mean training losses,
+and validation metrics, so the live view can be reproduced after a notebook or terminal session ends.
+
+The notebook defaults to `configs/base.yaml`. Set the real image and CSV paths there (or change `CONFIG_PATH`
+in its first code cell) before running it. The older `task1_training_dashboard.ipynb` is an exploratory,
+Task-1-only notebook and is not the recommended training entry point.
+
 ## Pipeline
 
 One CLI per stage. Each takes `--config`, `--device {auto,cpu,cuda}` and `--set key=value` overrides.

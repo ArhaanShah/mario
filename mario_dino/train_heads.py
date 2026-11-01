@@ -19,7 +19,9 @@ Outputs in ``train.out_dir``: ``fold{k}/task1.pt``, ``fold{k}/task2.pt``, ``fold
 from __future__ import annotations
 
 import copy
+import json
 import os
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 
@@ -96,10 +98,33 @@ def load_training_data(cfg: Config, store_dir: str | None = None):
     splits = load_splits(cfg.data.splits)
     kw = dict(image_root=cfg.data.image_root, check_images=False)
     t1 = t2 = None
+    task1_df = None
+    task1_source_df = None
     if cfg.data.task1_train_csvs:
-        t1 = build_task1(schema.read_csvs(cfg.data.task1_train_csvs, 1, **kw), store, splits)
+        task1_source_df = schema.read_csvs(cfg.data.task1_train_csvs, 1, **kw)
+        task1_df, unreadable = schema.exclude_unreadable_rows(task1_source_df, 1, cfg.data.image_root)
+        if unreadable:
+            log.warning(
+                "excluding %d Task 1 row(s) referencing %d unreadable image(s): %s",
+                len(task1_source_df) - len(task1_df),
+                len(unreadable),
+                unreadable,
+            )
+        t1 = build_task1(task1_df, store, splits)
     if cfg.data.task2_train_csvs:
-        t2 = build_task2(schema.read_csvs(cfg.data.task2_train_csvs, 2, **kw), store, splits)
+        task2_source_df = schema.read_csvs(cfg.data.task2_train_csvs, 2, **kw)
+        if task1_source_df is None:
+            raise ValueError("Task 2 training needs Task 1 rows to derive patient-grouped folds")
+        task2_df = schema.attach_task2_patients(task2_source_df, task1_source_df)
+        task2_df, unreadable = schema.exclude_unreadable_rows(task2_df, 2, cfg.data.image_root)
+        if unreadable:
+            log.warning(
+                "excluding %d Task 2 row(s) referencing %d unreadable image(s): %s",
+                len(task2_source_df) - len(task2_df),
+                len(unreadable),
+                unreadable,
+            )
+        t2 = build_task2(task2_df, store, splits)
     parts = ([t1.t_rows, t1.n_rows] if t1 else []) + ([t2.t_rows] if t2 else [])
     used = np.unique(np.concatenate(parts)) if parts else np.zeros(0, np.int64)
     if not store.done[used].all():
@@ -164,6 +189,7 @@ def fit(
     tag: str,
     n_views: int = N_VIEWS,
     max_steps: int | None = None,
+    on_epoch: Callable[[dict], None] | None = None,
 ) -> tuple[dict, list[dict], int]:
     """Minibatch training with early stopping on ``eval_fn``'s value (higher is better).
 
@@ -189,6 +215,7 @@ def fit(
             loss.backward()
             opt.step()
             steps += 1
+            sums["total"] = sums.get("total", 0.0) + loss.item()
             for k, v in parts.items():
                 sums[k] = sums.get(k, 0.0) + v
             n_batches += 1
@@ -196,6 +223,10 @@ def fit(
         value, metrics = eval_fn()
         rec = {"epoch": epoch, **{f"train_{k}": v / max(n_batches, 1) for k, v in sums.items()}, **metrics}
         history.append(rec)
+        if on_epoch is not None:
+            # A callback keeps notebook dashboards responsive while retaining the command-line workflow.
+            # It runs only after validation, which is deliberately evaluated once per epoch by the plan.
+            on_epoch(dict(rec))
         if value is None or value > best_value:
             best_value = -np.inf if value is None else value
             best_state, best_epoch, bad = copy.deepcopy(module.state_dict()), epoch, 0
@@ -229,6 +260,7 @@ def train_fold(
     out_dir: str,
     device: torch.device,
     store_meta: dict | None = None,
+    progress_callback: Callable[[dict], None] | None = None,
 ) -> dict:
     d = feats.shape[-1]
     tc, mc = cfg.train, cfg.model
@@ -254,6 +286,10 @@ def train_fold(
     common = {"fold": fold, "hparams": heads.hparams, "config": config_to_dict(cfg), "store_meta": store_meta,
               "dt_median_train": dt_median}
 
+    def emit(stage: str, rec: dict) -> None:
+        if progress_callback is not None:
+            progress_callback({"time": time.time(), "fold": fold, "stage": stage, **rec})
+
     # ---- stage A: Task 1 pairs
     w1 = class_weights(t1.y[tr1], N_TASK1).to(device)
     y1 = torch.from_numpy(t1.y).to(device)
@@ -273,7 +309,9 @@ def train_fold(
 
     loop = dict(batch_size=tc.batch_size, max_epochs=tc.max_epochs, patience=tc.patience, gen=gen)
     opt = torch.optim.AdamW(heads.parameters(), lr=tc.lr, weight_decay=tc.weight_decay)
-    state_a, hist_a, ep_a = fit(heads, opt, len(tr1), step_a, eval_a, tag=f"fold{fold} A", **loop)
+    state_a, hist_a, ep_a = fit(
+        heads, opt, len(tr1), step_a, eval_a, tag=f"fold{fold} A", on_epoch=lambda rec: emit("stage_a", rec), **loop
+    )
     heads.load_state_dict(state_a)
     torch.save({"kind": "heads", "task": 1, "heads": state_a, "best_epoch": ep_a, **common},
                os.path.join(fold_dir, "task1.pt"))
@@ -305,7 +343,9 @@ def train_fold(
             return _eval_value(t2.y[va2], logits, 2, tc.select_metric, w2.cpu())
 
         opt = torch.optim.AdamW(heads.parameters(), lr=tc.lr, weight_decay=tc.weight_decay)
-        state_b, hist_b, ep_b = fit(heads, opt, len(tr2), step_b, eval_b, tag=f"fold{fold} B", **loop)
+        state_b, hist_b, ep_b = fit(
+            heads, opt, len(tr2), step_b, eval_b, tag=f"fold{fold} B", on_epoch=lambda rec: emit("stage_b", rec), **loop
+        )
         heads.load_state_dict(state_b)
         torch.save({"kind": "heads", "task": 2, "heads": state_b, "best_epoch": ep_b, **common},
                    os.path.join(fold_dir, "task2.pt"))
@@ -332,7 +372,18 @@ def _metrics(frames: list[pd.DataFrame], task: int) -> dict:
     return {"per_fold": per_fold, "oof": score(oof["y_true"], oof["y_pred"], task), "n": len(oof)}
 
 
-def train_all(cfg: Config, store_dir: str | None = None, folds: list[int] | None = None) -> dict:
+def train_all(
+    cfg: Config,
+    store_dir: str | None = None,
+    folds: list[int] | None = None,
+    progress_callback: Callable[[dict], None] | None = None,
+) -> dict:
+    """Train every requested fold and persist one training/validation record after every epoch.
+
+    ``progress_callback`` receives dictionaries containing the fold, stage, epoch, mean training losses and
+    validation metrics.  It is intended for the notebook dashboard; command-line runs get the same data in
+    ``training_progress.jsonl`` under ``train.out_dir``.
+    """
     device = resolve_device(cfg.device)
     feats, t1, t2, meta = load_training_data(cfg, store_dir)
     if t1 is None:
@@ -341,7 +392,19 @@ def train_all(cfg: Config, store_dir: str | None = None, folds: list[int] | None
     out_dir = cfg.train.out_dir
     os.makedirs(out_dir, exist_ok=True)
     write_provenance(out_dir, cfg, {"store_meta": meta, "folds": folds, "device": str(device)})
-    results = [train_fold(cfg, k, feats, t1, t2, out_dir, device, meta) for k in folds]
+    progress_path = os.path.join(out_dir, "training_progress.jsonl")
+    # This file describes this invocation, rather than accidentally mixing records from a previous run.
+    with open(progress_path, "w", encoding="utf-8"):
+        pass
+
+    def report(event: dict) -> None:
+        with open(progress_path, "a", encoding="utf-8") as f:
+            f.write(json.dumps(event, default=lambda x: x.item() if hasattr(x, "item") else str(x)) + "\n")
+            f.flush()
+        if progress_callback is not None:
+            progress_callback(event)
+
+    results = [train_fold(cfg, k, feats, t1, t2, out_dir, device, meta, report) for k in folds]
 
     oof1 = [r["oof_task1"] for r in results]
     oof2 = [r["oof_task2"] for r in results if "oof_task2" in r]

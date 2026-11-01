@@ -9,12 +9,11 @@ class_names:
   task2: [reduced, stable, worsened]
 
 data:
-  image_root: data/images                    # B-scan PNGs; CSV image names are joined onto this
-  task1_train_csvs: [data/csv/df_task1_train_challenge.csv]
-  task2_train_csvs: [data/csv/df_task2_train_challenge.csv]
-  extra_csvs:                                # cached and encoded too, so inference reuses the features
-    - data/csv/df_task1_val_challenge.csv
-    - data/csv/df_task2_val_challenge.csv
+  image_root: Task_1/train                   # Task 2 training scans are also present here
+  task1_train_csvs: [Task_1/df_task1_train.csv]
+  # The available Task 2 CSV omits id_patient; training derives it from Task 1 image_at_ti matches.
+  task2_train_csvs: [Task_2/df_task2_train.csv]
+  extra_csvs: []                             # Train-only; validation images are in separate split folders
   splits: outputs/splits.json
   n_folds: 4
 

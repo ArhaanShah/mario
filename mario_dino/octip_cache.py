@@ -46,13 +46,25 @@ def missing_weight_files(weights_dir: str) -> list[str]:
     return [f for f in OCTIP_WEIGHT_FILES if not os.path.isfile(os.path.join(weights_dir, f))]
 
 
-def collect_images(csv_paths: Sequence[str]) -> list[str]:
+def collect_images(csv_paths: Sequence[str], image_root: str | None = None) -> list[str]:
     """Sorted unique B-scan names over Task 1 and Task 2 CSVs (task detected from columns)."""
     dfs = []
     for p in csv_paths:
         df = pd.read_csv(p)
         task = schema.detect_task(df)
-        dfs.append((task, schema.validate(df, task, require_label=False, check_images=False, source=p)))
+        df = schema.validate(df, task, require_label=False, check_images=False, source=p)
+        if image_root is not None:
+            kept, unreadable = schema.exclude_unreadable_rows(df, task, image_root)
+            if unreadable:
+                log.warning(
+                    "%s: excluding %d row(s) referencing %d unreadable image(s): %s",
+                    p,
+                    len(df) - len(kept),
+                    len(unreadable),
+                    unreadable,
+                )
+            df = kept
+        dfs.append((task, df))
     return schema.unique_images(dfs)
 
 
@@ -270,7 +282,7 @@ def main(argv: list[str] | None = None) -> None:
     cfg = load_from_args(args)
     mode = args.mode or cfg.preprocess.mode
     csvs = args.csv or (cfg.data.task1_train_csvs + cfg.data.task2_train_csvs + cfg.data.extra_csvs)
-    images = collect_images(csvs)
+    images = collect_images(csvs, cfg.data.image_root)
     stats = build_cache(
         images,
         cfg.data.image_root,

@@ -7,8 +7,12 @@ __pycache__/
 
 # data, caches, weights and run outputs never go in git
 data/
+!mario_dino/data/
+!mario_dino/data/**
 cache/
 features/
 weights/
 outputs/
 smoke_out/
+
+.early.coverage

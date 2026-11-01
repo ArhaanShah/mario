@@ -169,6 +169,15 @@ def train_all_partial(cfg: Config, folds: list[int] | None = None) -> dict:
     encoder = load_encoder(cfg.encoder, device)
     split = token_split(encoder, pc.n_blocks)
     t1_df = schema.read_csvs(cfg.data.task1_train_csvs, 1, image_root=cfg.data.image_root, check_images=False)
+    valid_t1_df, unreadable = schema.exclude_unreadable_rows(t1_df, 1, cfg.data.image_root)
+    if unreadable:
+        log.warning(
+            "excluding %d Task 1 row(s) referencing %d unreadable image(s): %s",
+            len(t1_df) - len(valid_t1_df),
+            len(unreadable),
+            unreadable,
+        )
+    t1_df = valid_t1_df
     images = schema.unique_images([(1, t1_df)])
     tokens = open_token_store(cfg, encoder, split)
     log.info("token cache: %d images x %d view(s), frozen blocks 0..%d", len(images), len(pc.token_views),

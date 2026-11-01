@@ -96,7 +96,8 @@ def _planted_cfg(csvs, tmp_path, *overrides):
 
 def test_stage_a_learns_planted_signal_and_stage_b_runs(big_csvs, tmp_path):
     cfg = _planted_cfg(big_csvs, tmp_path)
-    metrics = train_all(cfg)
+    events = []
+    metrics = train_all(cfg, progress_callback=events.append)
     mcc = metrics["task1"]["oof"]["Rk-correlation"]
     assert mcc > 0.5, f"stage A OOF MCC {mcc:.3f} should clearly beat the majority-class MCC of 0"
     out = cfg.train.out_dir
@@ -111,6 +112,12 @@ def test_stage_a_learns_planted_signal_and_stage_b_runs(big_csvs, tmp_path):
     assert "Quadratic-weighted_Kappa" in m["task2"]["oof"]
     assert os.path.isfile(os.path.join(out, "config.resolved.yaml"))
     assert os.path.isfile(os.path.join(out, "provenance.json"))
+    # The notebook redraws after each validation epoch, while the same records remain available to CLI users.
+    with open(os.path.join(out, "training_progress.jsonl"), encoding="utf-8") as f:
+        progress = [json.loads(line) for line in f]
+    assert len(events) == len(progress) > 0
+    assert {event["stage"] for event in progress} == {"stage_a", "stage_b"}
+    assert all({"fold", "epoch", "train_total", "val_loss"} <= set(event) for event in progress)
 
 
 @pytest.mark.parametrize(
