@@ -52,6 +52,9 @@ class EncoderCfg:
     weights: str | None = "weights/vit_base_patch14_reg4_dinov2.lvd142m.pth"
     img_size: list[int] = field(default_factory=lambda: [196, 518])  # H, W; both multiples of 14
     kwargs: dict[str, Any] = field(default_factory=dict)  # extra timm kwargs, e.g. {depth: 2} for smoke
+    kind: str = "dinov2"
+    checkpoint_key: str | None = None
+    preprocessing: str = "legacy_dino"
 
 
 @dataclass
@@ -107,9 +110,23 @@ class PartialCfg:
 
 
 @dataclass
+class FinetuneCfg:
+    """Full ConvNeXt/VisionFM Task 1 training; independent of partial.init_heads_from."""
+    out_dir: str = "outputs/finetune"
+    batch_size: int = 8
+    lr_encoder: float = 1e-5
+    lr_heads: float = 1e-4
+    weight_decay: float = 1e-4
+    max_epochs: int = 10
+    patience: int = 3
+    max_steps: int | None = None
+    init_heads_from: str | None = None
+
+
+@dataclass
 class InferenceCfg:
-    run_dir: str = "outputs/heads"  # train_heads or train_partial output
-    store_dir: str | None = None  # None = features.store_dir (reuses features computed for training)
+    run_dir: str = "outputs/heads"  # train_heads, train_partial or train_finetune output
+    store_dir: str | None = None  # frozen runs only; None = features.store_dir; full/partial use memory
     out_dir: str = "outputs/infer"
     team: str = "dino"
     method: int = 1
@@ -136,6 +153,7 @@ class Config:
     train: TrainCfg = field(default_factory=TrainCfg)
     partial: PartialCfg = field(default_factory=PartialCfg)
     inference: InferenceCfg = field(default_factory=InferenceCfg)
+    finetune: FinetuneCfg = field(default_factory=FinetuneCfg)
 
 
 class ConfigError(ValueError):
@@ -258,9 +276,31 @@ def config_to_dict(cfg: Config) -> dict:
 def validate(cfg: Config) -> None:
     if cfg.preprocess.mode not in MODES:
         raise ConfigError(f"preprocess.mode must be one of {MODES}, got {cfg.preprocess.mode!r}")
-    h, w = cfg.encoder.img_size
-    if h % 14 or w % 14:
-        raise ConfigError(f"encoder.img_size {cfg.encoder.img_size} must be multiples of the patch size 14")
+    ec = cfg.encoder
+    if ec.kind not in ("dinov2", "convnext", "visionfm"):
+        raise ConfigError(f"unknown encoder.kind {ec.kind!r}")
+    if ec.preprocessing not in ("legacy_dino", "imagenet", "visionfm_oct"):
+        raise ConfigError(f"unknown encoder.preprocessing {ec.preprocessing!r}")
+    if len(ec.img_size) != 2 or any(s <= 0 for s in ec.img_size):
+        raise ConfigError("encoder.img_size must contain two positive integers")
+    stride = {"dinov2": 14, "convnext": 32, "visionfm": 16}[ec.kind]
+    if any(s % stride for s in ec.img_size):
+        raise ConfigError(f"encoder.img_size {ec.img_size} must be multiples of {stride}")
+    if ec.kind == "dinov2" and "dinov2" not in ec.name:
+        raise ConfigError("dinov2 requires a DINOv2 timm model name")
+    if ec.kind == "convnext" and ec.name != "convnext_tiny.in12k_ft_in1k":
+        raise ConfigError("convnext supports convnext_tiny.in12k_ft_in1k")
+    if ec.kind == "visionfm" and ec.name != "vit_base_patch16":
+        raise ConfigError("visionfm supports vit_base_patch16")
+    if ec.kind != "visionfm" and ec.checkpoint_key is not None:
+        raise ConfigError("encoder.checkpoint_key is only supported for VisionFM")
+    if ec.checkpoint_key not in (None, "teacher", "student", "visionfm_state_dict"):
+        raise ConfigError("unsupported VisionFM checkpoint_key")
+    fc = cfg.finetune
+    if min(fc.batch_size, fc.max_epochs, fc.patience) < 1 or (fc.max_steps is not None and fc.max_steps < 1):
+        raise ConfigError("finetune batch_size, max_epochs, patience and max_steps must be positive")
+    if min(fc.lr_encoder, fc.lr_heads) <= 0 or fc.weight_decay < 0:
+        raise ConfigError("finetune learning rates must be positive; weight_decay must be nonnegative")
     if cfg.features.dtype not in ("float16", "float32"):
         raise ConfigError(f"features.dtype must be float16 or float32, got {cfg.features.dtype!r}")
     if cfg.model.head_input not in ("pair", "ft_only"):

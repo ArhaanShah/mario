@@ -2,6 +2,27 @@
 
 Oct 22, 2026 · @Arhaan
 
+## Scope note: encoder extension, November 5, 2026
+
+The design below records the original DINOv2 baseline. Its GPU-budget statements and
+milestones apply to that frozen-feature/token-suffix workflow, not to the later full
+image-based fine-tuning path. ConvNeXt Tiny and VisionFM OCT adapters are now implemented,
+with shared transform specifications, frozen feature extraction, Task 1 full encoder/head
+training and self-contained fold checkpoints. Task 2 full image-based training remains out
+of scope. DINO defaults, cache identity payloads and head/partial formats are retained.
+
+Use [the encoder reference](encoders.md) for the implemented API, strict checkpoint
+formats and configuration fields, and [the runbook](../RUNBOOK.md#alternative-task-1-encoders-convnext-and-visionfm-oct)
+for cloud setup, manual OCT weights and commands. Existing notebook code cells remain
+the DINO baseline; their new markdown examples document the separate fine-tuning CLI.
+
+For this extension the user requested code/documentation only. Static checks passed;
+no model construction/loading, CPU/GPU execution, optimizer steps, pytest runs or
+pretrained binaries were downloaded/validated. Runtime tests were written for later
+cloud/CI execution. The original CPU-test instructions below are historical requirements,
+not a claim that the current extension has been run. Released VisionFM OCT layout and
+cloud resource use remain unverified.
+
 ## Brief for the implementing agent
 
 Build a CPU-testable codebase for MARIO Tasks 1 and 2: a frozen DINOv2 encoder, a GRU that forecasts next-visit features, and one fusion head shared by both tasks. Reuse the DF41 repo for OCTIP preprocessing, scoring and the output format. You have no GPU and no MARIO data, so implement everything, test it on synthetic data with small randomly initialised models, and leave the GPU runs as documented commands.

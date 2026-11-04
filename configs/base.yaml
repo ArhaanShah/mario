@@ -28,6 +28,8 @@ preprocess:
   octip_batch_size: 16
 
 encoder:
+  # Legacy defaults: kind=dinov2, preprocessing=legacy_dino, checkpoint_key=null.
+  # Alternative presets: task1_convnext.yaml / task1_visionfm.yaml; see docs/encoders.md.
   name: vit_base_patch14_reg4_dinov2.lvd142m # switch: vit_small_patch14_reg4_dinov2.lvd142m
   weights: weights/vit_base_patch14_reg4_dinov2.lvd142m.pth
   img_size: [196, 518]                       # H, W -> 14 x 37 = 518 patch tokens + 5 prefix tokens
@@ -63,6 +65,7 @@ train:
   delta_t0: null                             # Task 2 horizon; null = training-fold median delta_t
 
 partial:
+  # DINOv2 only. Alternative full Task 1 training uses its separate finetune.* settings.
   n_blocks: 2
   lr_blocks: 1.0e-5
   lr_heads: 1.0e-4
@@ -78,6 +81,7 @@ partial:
   init_heads_from: outputs/heads
 
 inference:
+  # Frozen/partial runs need source weights; finetuned runs reconstruct from saved fold checkpoints.
   run_dir: outputs/heads
   store_dir: null                            # null = features.store_dir; images already encoded are reused
   out_dir: outputs/infer

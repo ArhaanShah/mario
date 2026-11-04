@@ -1,5 +1,7 @@
 # Inference image: both envs (torch/timm + TensorFlow 2.10/OCTIP) in one Python 3.10 environment, CPU.
-# Weights and trained heads are copied in; nothing is downloaded at runtime.
+# Source weights and trained heads are copied in; nothing is downloaded at runtime.
+# Full ConvNeXt/VisionFM Task 1 checkpoints include their encoder and do not need source weights.
+# Both new preset run directories are included by .dockerignore; mount custom run paths explicitly.
 #
 # Build from the repo root, after `fetch_weights.py` and training (see RUNBOOK.md step 6):
 #   docker build -f docker/Dockerfile -t mario-dino --build-arg GIT_COMMIT=$(git rev-parse HEAD) .

@@ -1,9 +1,11 @@
-"""MarioModelDINO: encoder + pooling + per-fold forecaster/head, for inference.
+"""MarioModelDINO for ensemble inference and Task1Net for differentiable image training.
 
 Logits are averaged over folds and over both views, as DF41's ``simple_ensemble_inference`` averages its
 fold models. The frozen-encoder path computes one feature vector per image and view, shared by every fold.
 Checkpoints from ``train_partial`` also carry fine-tuned encoder suffixes (last N blocks + final norm); then
 the prefix runs once per image and view and each fold runs its own suffix.
+Task1Net combines one encoder with its heads without inference decorators; the new
+full trainer uses it for ConvNeXt/VisionFM. Full checkpoint reconstruction is in finetuned.py.
 """
 
 from __future__ import annotations
@@ -153,7 +155,12 @@ class MarioModelDINO(nn.Module):
             raise FileNotFoundError(f"no fold*/task{task}.pt checkpoints in {run_dir!r}")
         ckpts = [torch.load(p, map_location="cpu", weights_only=False) for p in paths]
         heads = []
-        for c in ckpts:
+        for path, c in zip(paths, ckpts):
+            expected_fold = int(re.search(r"fold(\d+)", path).group(1))
+            if c.get("fold", expected_fold) != expected_fold or c.get("task", task) != task:
+                raise ValueError(f"checkpoint fold/task disagrees with its path: {path}")
+            if c["hparams"]["d"] != encoder.out_dim:
+                raise ValueError("checkpoint heads are incompatible with encoder.out_dim")
             h = heads_from_hparams(c["hparams"])
             h.load_state_dict(c["heads"], strict=True)
             heads.append(h)
@@ -161,6 +168,8 @@ class MarioModelDINO(nn.Module):
         if kinds == {"heads"}:
             model = cls(encoder, heads)
         elif kinds == {"partial"}:
+            if not isinstance(encoder, DinoEncoder):
+                raise ValueError("partial checkpoints require DINOv2")
             splits = {c["split"] for c in ckpts}
             if len(splits) != 1:
                 raise ValueError(f"fold checkpoints disagree on the encoder split: {splits}")
@@ -168,3 +177,20 @@ class MarioModelDINO(nn.Module):
         else:
             raise ValueError(f"mixed checkpoint kinds in {run_dir!r}: {kinds}")
         return model.to(device).eval(), ckpts
+
+
+class Task1Net(nn.Module):
+    """Differentiable encoder and heads for image-based Task 1 training."""
+    def __init__(self, encoder, heads):
+        super().__init__()
+        if encoder.out_dim != heads.hparams["d"]:
+            raise ValueError("encoder and heads have different feature dimensions")
+        self.encoder = encoder
+        self.heads = heads
+
+    def features(self, x_t, x_next):
+        return self.encoder(x_t), self.encoder(x_next)
+
+    def forward(self, x_t, x_next):
+        a, b = self.features(x_t, x_next)
+        return self.heads.task1_logits(a, b)

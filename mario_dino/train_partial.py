@@ -27,7 +27,7 @@ from torch import nn
 from .cli import base_parser, load_from_args
 from .config import Config, config_to_dict
 from .data import schema
-from .data.images import apply_view
+from .data.images import apply_view, resolve_input_spec
 from .data.splits import load_splits
 from .features import autocast_ctx, extract_features, store_identity
 from .losses import class_weights, stage_a_loss
@@ -85,7 +85,7 @@ def build_token_cache(cfg: Config, encoder: DinoEncoder, split: int, images, dev
     return extract_features(encoder, images, store, cfg.preprocess.cache_dir, cfg.preprocess.mode,
                             cfg.encoder.img_size, device, batch_size=cfg.features.batch_size,
                             chunk_size=cfg.partial.token_chunk_size, num_workers=cfg.features.num_workers,
-                            amp=cfg.features.amp, encode_fn=encode_tokens)
+                            amp=cfg.features.amp, encode_fn=encode_tokens, input_spec=resolve_input_spec(cfg.encoder))
 
 
 def _tokens(store: FeatureStore, rows: np.ndarray, views, device) -> torch.Tensor:
@@ -164,6 +164,8 @@ def train_partial_fold(
 
 
 def train_all_partial(cfg: Config, folds: list[int] | None = None) -> dict:
+    if cfg.encoder.kind != "dinov2":
+        raise ValueError("train_partial requires DINOv2 prefix tokens; use train_finetune for other encoders")
     device = resolve_device(cfg.device)
     pc, mc = cfg.partial, cfg.model
     encoder = load_encoder(cfg.encoder, device)

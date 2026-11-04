@@ -1,19 +1,23 @@
-# MARIO Tasks 1–2: DINOv2 + GRU forecaster — runbook
+# MARIO Tasks 1–2: encoders + GRU forecaster — runbook
 
 What this repo does, in one line per task:
 
-- **Task 1** (4 classes): `head(f_t, f_{t+Δt})` on frozen DINOv2 features of both visits.
+- **Task 1** (4 classes): `head(f_t, f_{t+Δt})` on encoder features of both visits.
 - **Task 2** (3 classes): `head(f_t, f̂_{t+Δt})[:, :3]`, with `f̂ = forecaster(f_t, Δt₀)`, a GRU forecast in
   feature space. This replaces DF41's pixel-space PPMAE.
 
-The only mandatory GPU job is **step 3** (one frozen encoder pass per unique image and view). Training the
-forecaster and head, the folds and the ablations all run on CPU from cached features.
+The default DINOv2 frozen workflow uses **step 3** for one encoder pass per unique image/view;
+head training and ablations can then run on CPU. ConvNeXt and VisionFM OCT support the same frozen
+workflow and a separate full Task 1 fine-tuning path whose encoder compute grows with every epoch/fold.
+For that path, go to [alternative encoders](#alternative-task-1-encoders-convnext-and-visionfm-oct);
+it does not require a feature or token cache. GPU is recommended for encoder work; CPU is supported.
 
 Run every command from the repo root. Paths below are the defaults in `configs/base.yaml`.
 
 The design rationale (GPU budget, DF41 facts, milestones) is in
-[docs/implementation-plan.md](docs/implementation-plan.md), kept as written. Where the code departs from it
-is listed under [Deviations from the plan](#deviations-from-the-plan-and-why) below.
+[docs/implementation-plan.md](docs/implementation-plan.md), retained as a historical design with a
+scope note. The current adapter/config/checkpoint contract is in [docs/encoders.md](docs/encoders.md).
+Other departures appear under [Deviations from the plan](#deviations-from-the-plan-and-why) below.
 
 ## Models and where they come from
 
@@ -23,13 +27,15 @@ Every model the default pipeline needs is either public or not needed:
 | --- | --- | --- | --- |
 | DINOv2 ViT-B/14 with 4 registers (`vit_base_patch14_reg4_dinov2.lvd142m`) | frozen encoder | Hugging Face [`timm/vit_base_patch14_reg4_dinov2.lvd142m`](https://huggingface.co/timm/vit_base_patch14_reg4_dinov2.lvd142m) | public, not gated, Apache-2.0; `scripts/fetch_weights.py` downloads it once |
 | DINOv2 ViT-S/14 with 4 registers (`vit_small_patch14_reg4_dinov2.lvd142m`) | smaller-budget switch | Hugging Face [`timm/vit_small_patch14_reg4_dinov2.lvd142m`](https://huggingface.co/timm/vit_small_patch14_reg4_dinov2.lvd142m) | public, not gated, Apache-2.0 |
+| ConvNeXt Tiny (`convnext_tiny.in12k_ft_in1k`) | alternative frozen encoder or full Task 1 fine-tuning | pinned timm 1.0.30 | prepare headless local weights with `fetch_weights.py --config configs/task1_convnext.yaml` |
+| VisionFM OCT ViT-B/16 (`vit_base_patch16`) | alternative frozen encoder or full Task 1 fine-tuning | official OCT download linked in the alternative-encoder section | manual download; explicit wrapper selection; vendored backbone under CC BY-NC 4.0 |
 | OCTIP retina localizers (`FPN_efficientnetb6_384x384.hdf5`, `FPN_efficientnetb7_320x320.hdf5`) | `--mode octip` only | by email request to the OCTIP author ([leto-atreides-2/octip](https://github.com/leto-atreides-2/octip)); DF41 does not ship them | **not needed**: `--mode classic` (the default) replaces them, see step 2 |
 | EfficientNet-B6/B7 ImageNet weights | `segmentation_models` asks for them when OCTIP builds its FPNs | GitHub releases | **not needed**: OCTIP's .hdf5 overwrites them, so `octip_cache` builds the FPNs with `encoder_weights=None` and stays offline |
 
 DF41's own checkpoints (ResNet50 fusion models, PPMAE) are not released and not used. The MARIO images and
 CSVs come from the challenge organisers.
 
-If the Hugging Face Hub is blocked, run `fetch_weights.py` anywhere with access and copy
+For DINOv2/ConvNeXt, if the Hugging Face Hub is blocked, run `fetch_weights.py` anywhere with access and copy
 `weights/*.pth` and `weights/*.pth.json`, or point `HF_ENDPOINT` at a mirror.
 
 ---
@@ -129,7 +135,7 @@ feature store records the mode and refuses to mix modes. The step is idempotent:
 cached. Images where the PreProcessor fails, or keeps under 25% of the A-scans, are cached raw, as DF41
 does, and listed in `cache/<mode>/failures.csv`.
 
-## 3. Feature extraction (GPU, the only mandatory GPU job)
+## 3. Frozen feature extraction (GPU recommended)
 
 ```bash
 source .venv/bin/activate
@@ -168,9 +174,10 @@ Checkpoints are selected on fold-validation MCC (`train.select_metric`).
 Useful flags: `--folds 0 1`, `--set train.delta_t0=<days>` (Task 2 horizon; default = training-fold median
 `delta_t`), `--set train.task2_aux_from_task1_pairs=true`.
 
-## 5. Optional: partial fine-tune (GPU)
+## 5. Optional: DINOv2 partial fine-tune (GPU recommended)
 
-Run this only after step 4 is scored: it is the only step whose GPU cost grows with the number of epochs.
+Run this after reviewing step 4's scores. This path is DINOv2-only and trains from cached prefix tokens.
+For ConvNeXt/VisionFM, use `train_finetune` with image pairs as described below.
 
 ```bash
 python -m mario_dino.train_partial --config configs/base.yaml --device cuda
@@ -192,11 +199,16 @@ python -m mario_dino.infer --config configs/task1.yaml --task 1    # -> outputs/
 python -m mario_dino.infer --config configs/task2.yaml --task 2    # -> outputs/infer_task2/
 ```
 
-Each run caches its CSV's images (OCTIP step, skipping cached files), encodes any image not yet in the
+For frozen head runs, inference caches its CSV's images (OCTIP step, skipping cached files), encodes any image not yet in the
 feature store (once per view), averages logits over the 4 folds and both views, and writes
 `results_task{t}_team_dino_method_{m}.csv` with DF41's columns: `y_true` (only when the CSV has labels),
 `y_pred`, `cases`. With labels it also writes `scores_task{t}_method_{m}.json`. Task 2 images that were
 already encoded for Task 1 or training are reused. Set the team name with `inference.team`.
+
+DINO partial runs share the frozen prefix and apply each fold's saved suffix. Full fine-tuned runs
+load each fold's encoder/heads sequentially and average that fold's own image/view logits; they do not
+use frozen feature stores or require the original pretrained encoder file. See the
+[checkpoint reference](docs/encoders.md#checkpoint-and-cache-compatibility).
 
 Docker (CPU; both envs in one image; weights and trained heads copied in; no network at runtime):
 
@@ -226,12 +238,17 @@ make lint
 ```
 
 On Windows without `make`: `python -m pytest -q` and `python scripts/smoke.py`.
+These commands execute CPU models. `make smoke` remains the original DINO pipeline; it does not
+exercise ConvNeXt/VisionFM full fine-tuning. New runtime tests are in
+`tests/test_alternative_encoders.py`, with an old-schema DINO regression in `tests/test_infer.py`.
+They have not been executed in this implementation session; run them later on cloud/CI.
 `OCTIP_WEIGHTS_DIR=/path/to/octip_models make test` runs the real OCTIP test when the octip packages are
 installed in the same env.
 
 ## Status: what was and was not run
 
-Run on CPU (Windows, Python 3.12, torch 2.14.1+cpu, timm 1.0.30):
+Historical DINO baseline results recorded before the alternative-encoder extension
+(Windows, Python 3.12, torch 2.14.1+cpu, timm 1.0.30):
 
 - `pytest`: 60 passed, 1 skipped (`test_octip_mode_real_weights`: no OCTIP weights or TensorFlow).
 - `scripts/smoke.py`: the full pipeline on synthetic data with `classic` preprocessing, including partial
@@ -240,6 +257,13 @@ Run on CPU (Windows, Python 3.12, torch 2.14.1+cpu, timm 1.0.30):
 - `uv pip compile` of `requirements/{main,octip,docker}.txt` for Python 3.10 / manylinux x86_64. All three
   resolve (`requirements/*.lock.txt`).
 - `check_label_alignment.py` on DF41's val CSVs reproduces 2140/3822 (56%).
+
+The above count is historical, not a current-suite result. For the ConvNeXt/VisionFM extension,
+static syntax, dataclass/YAML schema, lint, package metadata/license inclusion and diff checks passed.
+Static comparisons also confirmed unchanged DINO helpers/default transforms and matching pinned
+VisionFM positional interpolation. No model construction/loading, CPU/GPU execution, optimizer steps,
+pytest or pretrained binary downloads were performed. New regression tests await cloud/CI execution;
+released OCT checkpoint format and actual pretrained compatibility remain unverified.
 
 Not run, by design or for lack of assets:
 
@@ -272,6 +296,9 @@ Relative to [docs/implementation-plan.md](docs/implementation-plan.md):
   choroid. `synthetic_bscan` also returns the true retina top that the localizer tests check against.
 - **Partial fine-tune inference**: fold checkpoints carry their own encoder suffix, so `infer.py` runs the
   shared prefix once per image and view and each fold's suffix on top.
+- **Alternative encoders**: ConvNeXt/VisionFM adapters, shared transform specs, image-based Task 1
+  full fine-tuning and self-contained fold checkpoints extend the original frozen DINO scope.
+  Existing DINO defaults and identity payloads are retained. See [docs/encoders.md](docs/encoders.md).
 
 ## Open questions (resolve before step 3)
 
@@ -283,7 +310,7 @@ Relative to [docs/implementation-plan.md](docs/implementation-plan.md):
 - [ ] Optional: request the two OCTIP weight files from the OCTIP author (gwenole.quellec@inserm.fr, per
       [leto-atreides-2/octip](https://github.com/leto-atreides-2/octip)) to compare `octip` against `classic`.
       Not needed to run anything.
-- [ ] Whether the challenge rules allow DINOv2's public pretrained weights.
+- [ ] Whether challenge rules permit the selected pretrained encoder and its source/license terms.
 
 ## Code map
 
@@ -294,16 +321,153 @@ Relative to [docs/implementation-plan.md](docs/implementation-plan.md):
 | `mario_dino/data/splits.py` | GroupKFold(4) on `id_patient` over Task 1 ∪ Task 2 → `splits.json` |
 | `mario_dino/octip_cache.py` | CLI: `classic`, batched OCTIP (`octip`) or copy (`raw`) → `cache/<mode>/` |
 | `mario_dino/retina.py` | weight-free retina localizers + DF41's OCTIP PreProcessor loaded without TensorFlow |
-| `mario_dino/data/images.py` | resize 518×196, min-max, 3 channels, ImageNet norm, views 0/1 |
-| `mario_dino/models/encoder.py` | timm DINOv2 from local weights; CLS + mean-patch pooling; prefix/suffix split |
+| `mario_dino/data/images.py` | versioned shared input specs, legacy/new transforms, cached images and paired-image dataset, views 0/1 |
+| `mario_dino/models/encoder.py` | explicit offline factory/local loading; preserved DINO pooling and prefix/suffix helpers |
+| `mario_dino/models/convnext.py` | differentiable headless timm ConvNeXt adapter |
+| `mario_dino/models/visionfm.py` | differentiable VisionFM CLS adapter and strict external checkpoint import |
+| `mario_dino/models/vendor/` | isolated pinned VisionFM backbone, attribution and upstream license |
+| `mario_dino/models/finetuned.py` | resolved encoder specifications and self-contained checkpoint reconstruction |
 | `mario_dino/store.py` | append-only resumable memmap store (features and token caches) |
 | `mario_dino/features.py` | CLI: unique images → feature store |
 | `mario_dino/models/heads.py` | `Forecaster`, `FusionHead`, ablation heads, `MarioHeads` |
 | `mario_dino/losses.py` | class weights, forecasting MSE (detached target), stage A/B losses |
 | `mario_dino/train_heads.py` | CLI: CPU training per fold, OOF predictions, metrics |
-| `mario_dino/train_partial.py` | CLI: optional partial fine-tune on cached prefix tokens |
-| `mario_dino/models/full.py` | `MarioModelDINO`: encoder + fold heads (+ suffixes) for inference |
-| `mario_dino/infer.py` | CLI: challenge CSV → results CSV (DF41 format) |
+| `mario_dino/train_partial.py` | CLI: DINO-only partial fine-tune on cached prefix tokens |
+| `mario_dino/train_finetune.py` | CLI: ConvNeXt/VisionFM full Task 1 fine-tuning from image pairs, OOF/metrics/checkpoints |
+| `mario_dino/models/full.py` | `MarioModelDINO` inference and differentiable encoder/head `Task1Net` |
+| `mario_dino/infer.py` | CLI: frozen/partial/full-fold ensemble → results CSV (DF41 format) |
 | `mario_dino/scoring.py` | DF41 `specificity` + challenge metrics |
 | `mario_dino/synthetic.py` | synthetic dataset and planted feature store |
 | `scripts/` | `make_synthetic_data`, `fetch_weights`, `check_label_alignment`, `compare_runs`, `smoke` |
+
+## Alternative Task 1 encoders: ConvNeXt and VisionFM OCT
+
+Use `configs/task1_convnext.yaml` or `configs/task1_visionfm.yaml`. Both support frozen
+feature extraction followed by `train_heads`, or full encoder/head training with
+`train_finetune`. Fine-tuning is Task 1 only. `train_partial` remains DINOv2-only.
+Existing DINO configurations, pooling, feature identities and checkpoint defaults remain compatible.
+
+Run commands below from the repository root on the cloud instance. Use the existing
+main environment (`pip install -r requirements/main.txt` and `pip install -e .`),
+with a CUDA-enabled PyTorch build installed for the instance. Keep `timm==1.0.30`.
+Wrapped VisionFM files containing upstream `argparse.Namespace` metadata need
+PyTorch >=2.4; raw backbone tensor dictionaries retain PyTorch >=2.1 support.
+No upstream VisionFM environment, einops, FlashAttention or extra encoder dependencies
+are required. The existing retinal cache setup still applies; `preprocess.mode=raw`
+is available as an explicit ablation.
+
+Prepare pretrained weights explicitly; training and inference never download them:
+
+```bash
+python scripts/fetch_weights.py --config configs/task1_convnext.yaml
+```
+
+For VisionFM, manually download the official **OCT** encoder from the
+[VisionFM OCT release](https://drive.google.com/file/d/1o6E-ine2QLx2pxap-c77u-SU0FjxwypA/view?usp=sharing)
+and place it at `weights/VFM_OCT_weights.pth`. The
+[upstream weights table](https://github.com/ABILab-CUHK/VisionFM#31-download-the-pretrained-weights-of-visionfm)
+is the source of that link. Release bytes have **not** been downloaded or inspected
+in this session. The preset explicitly assumes a **raw backbone state dict**
+(`checkpoint_key: null`). If your file is wrapped, explicitly select `teacher`,
+`student`, or `visionfm_state_dict` using `encoder.checkpoint_key`. The loader does
+not guess from filenames. Missing wrapper keys, unknown tensors, incomplete backbones
+and incompatible shapes fail. Known leading `module.`/`backbone.` prefixes,
+pretraining/classification heads and the unused masking embedding are handled;
+discarded tensors are logged. Missing/malformed files never become random models.
+
+Optional local conversion saves a canonical raw backbone and SHA-256 sidecar:
+
+```bash
+# Example for a teacher wrapper: select the key actually present in your file.
+python scripts/fetch_weights.py --config configs/task1_visionfm.yaml \
+  --source /path/to/original_oct.pth --set encoder.checkpoint_key=teacher \
+  --out weights/VFM_OCT_weights.pth
+# The output is RAW: use encoder.checkpoint_key=null thereafter.
+```
+
+Create/reuse the existing patient-grouped split file, then fine-tune:
+
+```bash
+python -m mario_dino.data.splits --config configs/task1_convnext.yaml
+python -m mario_dino.train_finetune --config configs/task1_convnext.yaml --device cuda
+python -m mario_dino.infer --config configs/task1_convnext.yaml --task 1 --csv /path/to/task1.csv --device cuda
+
+# Raw OCT weights; add --set encoder.checkpoint_key=teacher for a teacher wrapper.
+python -m mario_dino.train_finetune --config configs/task1_visionfm.yaml --device cuda
+python -m mario_dino.infer --config configs/task1_visionfm.yaml --task 1 --csv /path/to/task1.csv --device cuda
+```
+
+Each fold reloads the same pretrained initialization, creates fresh heads and AdamW
+state, and uses training-fold class frequencies and median time gap. Both images
+receive the same sampled flip. The existing loss is unchanged: Task 1 CE propagates
+through both images; only the forecasting target is detached. Validation averages
+both flip views with the existing metric selection and patience semantics
+(`train.select_metric: mcc` by default). Training uses CUDA bf16 when supported and
+enabled by `features.amp`, otherwise fp32. Images load on demand from the retinal cache.
+Lower `finetune.batch_size` and `inference.batch_size` if needed; 8 is a starting
+preset, not a measured memory guarantee. `--folds 0` selects a fold;
+`finetune.max_steps` optionally caps steps for a later cloud smoke run.
+
+Outputs go to `outputs/convnext_finetune` or `outputs/visionfm_finetune`, including
+`fold{k}/task1.pt`, history, out-of-fold predictions, `summary.json`, and `metrics.json`.
+Checkpoints use `kind: finetuned`, `format_version: 1`, strict full adapter/head state,
+resolved architecture, positional grid, pooling, transform, and source provenance.
+Inference reconstructs from the checkpoint after the original weights and sidecar
+have been removed. Each fold encodes its own images/views; logits are averaged
+across folds/views. One full fold model is loaded at a time. Frozen feature stores
+are never used in this path. Fold encoder specifications must agree. The stored
+transform overrides current `encoder.*` initialization settings at inference;
+retinal `preprocess.mode` must match. Optimizer resume is not implemented.
+
+For a frozen baseline, use the separate feature/head paths in either preset:
+
+```bash
+python -m mario_dino.octip_cache --config configs/task1_convnext.yaml
+python -m mario_dino.features --config configs/task1_convnext.yaml --device cuda
+python -m mario_dino.train_heads --config configs/task1_convnext.yaml
+python -m mario_dino.infer --config configs/task1_convnext.yaml --task 1 \
+  --run-dir outputs/convnext_heads --csv /path/to/task1.csv --device cuda
+# Substitute task1_visionfm.yaml and outputs/visionfm_heads for VisionFM.
+```
+
+DINO heads/forecasters cannot be reused with the alternatives, even when dimensions
+match. `finetune.init_heads_from` defaults to null independently of the inherited
+`partial.init_heads_from`. An optional warm start must be a frozen Task 1 run with
+the same fold, encoder, pretrained weights, transform identity, dimension and head
+architecture. Keep the default separate feature/run directories.
+
+ConvNeXt uses native average pooling and final normalization (768 standard Tiny
+features). VisionFM uses final-normalized CLS (768), a MARIO adapter choice rather
+than its upstream multi-block downstream decoders. Its square pretrained positional
+parameter is inferred from the weights, retained, and interpolated at runtime using
+upstream logic. New presets use `[192, 512]` for approximate B-scan aspect ratio;
+VisionFM also supports `[224, 224]`. Dimensions are never silently rounded/cropped.
+OCT stays grayscale repeated into three channels. `legacy_dino` retains linear
+resize/min-max scaling/ImageNet normalization exactly. `imagenet` uses OpenCV bicubic
+uint8 resize then /255 and ImageNet mean/std. `visionfm_oct` uses that resize/scaling
+with mean `(0.21091926, 0.21091926, 0.21091919)` and std
+`(0.17598894, 0.17598891, 0.17598893)`. Retinal preprocessing and rectangular resize
+are MARIO adaptations, not an exact reproduction of upstream experiments.
+
+The minimal vendored backbone is pinned to VisionFM commit
+`648ab0895f8e80e2c937f658bd2f1629ea6d27e7`, with upstream CC BY-NC 4.0 license,
+attribution and local edits recorded in `mario_dino/models/vendor/`. Ordinary
+attention has no CUDA requirement. The unmodified pinned source is an offline
+test oracle. Docker's build context includes both new preset head/finetune output
+directories. Mount custom run paths or explicitly include them in `.dockerignore`.
+
+Verification in this session was **static only**: no training, inference, model
+loading/construction, forwards/backwards, optimizer steps, pytest runs or pretrained
+binary downloads. Regression tests are written for later cloud/CI execution:
+
+```bash
+# These commands RUN CPU models: execute only when ready on the cloud/CI machine.
+python -m pytest tests/test_encoder.py tests/test_partial.py tests/test_store_features.py \
+  tests/test_heads_training.py tests/test_infer.py tests/test_images.py tests/test_alternative_encoders.py
+```
+
+New tests use offline random fixtures: small ConvNeXt and one-block VisionFM.
+Coverage includes actual Task 1 gradients/updates, strict import, positional grids,
+square/rectangular upstream parity, transforms/identities, frozen extraction, joint
+training, serial fold inference and removal of source weights. These tests have not
+been executed here. Real release compatibility and GPU memory/throughput remain unmeasured.

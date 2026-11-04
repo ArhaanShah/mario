@@ -1,6 +1,6 @@
-"""Feature cache: each unique image -> pooled DINOv2 vector per view, into a resumable FeatureStore.
+"""Feature cache: each unique image -> pooled encoder vector per view, into a resumable FeatureStore.
 
-The only mandatory GPU step. Store rows have shape ``[2 views, 2D]``. Work runs in chunks of
+Store rows have shape ``[2 views, encoder.out_dim]``. Work runs in chunks of
 ``features.chunk_size`` images; a chunk is marked done only after its rows are flushed, so an interrupted
 run resumes at the first unfinished chunk.
 
@@ -18,7 +18,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from .cli import base_parser, load_from_args
-from .data.images import N_VIEWS, CachedImageDataset, apply_view, check_cached
+from .data.images import N_VIEWS, CachedImageDataset, apply_view, check_cached, resolve_input_spec
 from .models.encoder import DinoEncoder, load_encoder, weights_identity
 from .octip_cache import collect_images
 from .store import FeatureStore
@@ -38,7 +38,7 @@ def autocast_ctx(device: torch.device, amp: bool):
 
 def store_identity(cfg) -> dict:
     """What a feature store's vectors depend on; a store refuses to open with a different identity."""
-    return {
+    identity = {
         "encoder": cfg.encoder.name,
         "encoder_kwargs": cfg.encoder.kwargs,
         "img_size_hw": list(cfg.encoder.img_size),
@@ -47,6 +47,15 @@ def store_identity(cfg) -> dict:
         "pooling": POOLING,
         "views": ["identity", "hflip"],
     }
+    kind = getattr(cfg.encoder, "kind", "dinov2")
+    if kind != "dinov2" or getattr(cfg.encoder, "preprocessing", "legacy_dino") != "legacy_dino":
+        identity.update({"identity_version": 2, "encoder_kind": kind,
+                         "input_spec": resolve_input_spec(cfg.encoder),
+                         "checkpoint_key": cfg.encoder.checkpoint_key})
+        identity["pooling"] = {"dinov2": POOLING,
+                               "convnext": "native average pool and final normalization",
+                               "visionfm": "final-normalized CLS"}[kind]
+    return identity
 
 
 def open_feature_store(cfg, root: str, out_dim: int) -> FeatureStore:
@@ -78,6 +87,7 @@ def extract_features(
     amp: bool = True,
     on_chunk: Callable[[int, int], None] | None = None,
     encode_fn: Callable[[torch.Tensor], torch.Tensor] | None = None,
+    input_spec: dict | None = None,
 ) -> dict:
     """Encode every image in ``images`` whose row is not done yet. Returns counts.
 
@@ -104,7 +114,7 @@ def extract_features(
         chunk = pending[c * chunk_size : (c + 1) * chunk_size]
         names = [store.images[r] for r in chunk]
         loader = DataLoader(
-            CachedImageDataset(names, cache_dir, mode, img_size_hw),
+            CachedImageDataset(names, cache_dir, mode, img_size_hw, input_spec),
             batch_size=batch_size,
             shuffle=False,
             num_workers=num_workers,
@@ -149,6 +159,7 @@ def main(argv: list[str] | None = None) -> None:
         chunk_size=cfg.features.chunk_size,
         num_workers=cfg.features.num_workers,
         amp=cfg.features.amp,
+        input_spec=resolve_input_spec(cfg.encoder),
     )
     store.close()
     write_provenance(root, cfg, {"csvs": csvs, "stats": stats, "device": str(device)})

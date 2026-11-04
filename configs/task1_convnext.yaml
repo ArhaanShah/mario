@@ -1,0 +1,30 @@
+# ConvNeXt Tiny: Task 1 image fine-tuning, or frozen train_heads (Tasks 1-2 if configured).
+# See docs/encoders.md and RUNBOOK.md; fine-tuning does not use features.store_dir.
+base: task1.yaml
+encoder:
+  kind: convnext
+  name: convnext_tiny.in12k_ft_in1k
+  weights: weights/convnext_tiny.in12k_ft_in1k.pth
+  img_size: [192, 512]
+  kwargs: {}
+  checkpoint_key: null  # ConvNeXt requires the raw headless timm state dict from fetch_weights.py
+  preprocessing: imagenet
+features:
+  store_dir: features/convnext
+  batch_size: 8
+train:
+  out_dir: outputs/convnext_heads
+finetune:
+  out_dir: outputs/convnext_finetune
+  batch_size: 8
+  lr_encoder: 1.0e-5
+  lr_heads: 1.0e-4
+  weight_decay: 1.0e-4
+  max_epochs: 10
+  patience: 3
+  max_steps: null
+  init_heads_from: null
+inference:
+  run_dir: outputs/convnext_finetune
+  out_dir: outputs/infer_convnext
+  batch_size: 8

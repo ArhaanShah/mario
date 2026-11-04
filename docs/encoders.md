@@ -1,0 +1,138 @@
+# Encoder reference
+
+This describes the implemented encoder extension. For setup, downloads and cloud commands, see
+[the runbook](../RUNBOOK.md#alternative-task-1-encoders-convnext-and-visionfm-oct).
+The [original implementation plan](implementation-plan.md) describes the historical DINO baseline.
+The new runtime tests and released pretrained binaries have not been executed/validated in this session.
+
+## Supported workflows
+
+| `encoder.kind` | Supported model | Frozen features + `train_heads` | `train_partial` | `train_finetune` |
+| --- | --- | --- | --- | --- |
+| `dinov2` (default) | timm DINOv2 names used by existing configs | Tasks 1–2 | Task 1, last N blocks + final norm | Use `train_partial` |
+| `convnext` | `convnext_tiny.in12k_ft_in1k` | Tasks 1–2 | Rejected; use `train_finetune` | Task 1, full encoder + heads |
+| `visionfm` | `vit_base_patch16` | Tasks 1–2 | Rejected; use `train_finetune` | Task 1, full encoder + heads |
+
+Task 2 image-based end-to-end training is outside this extension. The new Task 1 presets inherit
+the base data configuration, including its Task 2 CSV: the optional frozen `train_heads` path runs
+both stages when that CSV is configured. The full fine-tuning trainer reads Task 1 pairs only.
+
+## Configuration and preprocessing
+
+`EncoderCfg` retains `name`, `weights`, `img_size` (height, width), and `kwargs`. New fields are:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `kind` | `dinov2` | Explicit architecture family; names must agree with the family |
+| `checkpoint_key` | `null` | Raw weights; only VisionFM accepts `teacher`, `student`, or `visionfm_state_dict` wrappers |
+| `preprocessing` | `legacy_dino` | Shared input-transform preset; independent of retinal `preprocess.mode` |
+
+| Preset | Resize and scaling | Normalization |
+| --- | --- | --- |
+| `legacy_dino` | OpenCV linear resize, per-image min/max scaling | ImageNet mean/std; preserves historical numerical behavior |
+| `imagenet` | OpenCV bicubic resize of uint8, then /255 | ImageNet mean/std |
+| `visionfm_oct` | OpenCV bicubic resize of uint8, then /255 | OCT mean `(0.21091926, 0.21091926, 0.21091919)`, std `(0.17598894, 0.17598891, 0.17598893)` |
+
+All paths read grayscale B-scans and repeat them into three channels. `preprocess.mode` still selects
+the retinal cache (`classic`, `octip`, or `raw`). Extraction, paired training, validation and inference
+share the versioned input-spec resolver in `data/images.py`. New presets use `[192, 512]`;
+`[224, 224]` is also supported. Configured dimensions must be positive multiples of 14 for DINOv2,
+32 for ConvNeXt, or 16 for VisionFM. No automatic rounding/crop is applied.
+
+`FinetuneCfg` is separate from `TrainCfg` and `PartialCfg`:
+
+| Field | Default |
+| --- | --- |
+| `out_dir` | `outputs/finetune` (overridden separately by each new preset) |
+| `batch_size` | `8` |
+| `lr_encoder`, `lr_heads` | `1e-5`, `1e-4` |
+| `weight_decay` | `1e-4` |
+| `max_epochs`, `patience` | `10`, `3` |
+| `max_steps` | `null` (optional per-fold optimizer-step cap) |
+| `init_heads_from` | `null` (optional compatible frozen Task 1 run directory) |
+
+`train.folds`/`--folds`, `train.lambda_pred`, `train.select_metric`, `train.delta_t0`,
+`model.*`, and `features.amp` also apply to full fine-tuning. Images are loaded on demand, with the
+same sampled horizontal flip for both pair members. Each fold reloads the source encoder and creates
+its own heads/optimizer. Class weights and time scaling use training-fold rows. CUDA bf16 is used
+when enabled and supported; otherwise training uses fp32. These defaults are starting settings,
+with no measured accuracy or cloud memory guarantee.
+
+## Adapter interface and weights
+
+`models/encoder.py` remains the public entry point. `build_encoder(enc_cfg, native_grid_size=14)`
+constructs a model without consulting source files; `load_encoder(enc_cfg, device, trainable=False)`
+loads local weights strictly, returning frozen/eval by default. `trainable=True` enables gradients
+and training mode. Every adapter exposes `out_dim` and a differentiable
+`forward(images: [B, 3, H, W]) -> [B, out_dim]`. `Task1Net` provides the differentiable encoder/head
+composition; `MarioModelDINO` retains its inference methods.
+
+- **DINOv2:** unchanged final-normalized CLS + mean patch pooling, excluding register/prefix tokens.
+  ViT-B yields 1536 features. Prefix/suffix methods and token caches remain DINO-specific.
+- **ConvNeXt:** headless timm model (`num_classes=0`, `global_pool="avg"`), native final normalization,
+  with `out_dim` read from the model (768 for standard Tiny). DINO image-size kwargs are not passed.
+- **VisionFM:** isolated ViT-B/16 (768 dimensions, 12 blocks/heads, biased QKV, LayerNorm epsilon 1e-6).
+  Final-normalized CLS is the MARIO pooling choice. The native square positional grid is inferred from
+  `pos_embed`, retained, and interpolated for runtime rectangles using the pinned upstream algorithm.
+  Masked pretraining and FlashAttention are disabled. Vendored code and license are in
+  [`models/vendor`](../mario_dino/models/vendor/visionfm_vit.py), pinned to upstream commit
+  `648ab0895f8e80e2c937f658bd2f1629ea6d27e7` under CC BY-NC 4.0.
+
+DINOv2/ConvNeXt preparation uses `scripts/fetch_weights.py` with network access; runtime construction
+uses `pretrained=False`. ConvNeXt supports the headless timm state dict written by that script,
+not an arbitrary torchvision classifier checkpoint. VisionFM accepts a raw backbone tensor dict or
+an explicitly selected supported wrapper. Its helper strips only known leading `module.`/`backbone.`
+prefixes with collision checks, logs discarded known heads/masking tensors, and strictly loads the
+remaining full backbone. Unknown extras, missing keys and incompatible shapes fail.
+
+Optional VisionFM `--source` conversion writes canonical raw weights and a SHA-256 sidecar; use
+`checkpoint_key=null` for its output. Upstream Namespace metadata is narrowly allowlisted when a
+wrapper is selected (PyTorch >=2.4); there is no unrestricted-pickle fallback for external encoder
+weights. Production missing/malformed weights never silently become random initialization.
+Explicit null weights or `--random-init` remain test-fixture options.
+
+## Checkpoint and cache compatibility
+
+| Run type | Saved kind | Runtime dependencies and inference |
+| --- | --- | --- |
+| Frozen heads | `heads`, or missing kind for historical files | Matching local source encoder weights and transform; unique-image features shared across folds |
+| DINO partial | `partial` | Matching local DINO source weights plus saved fold suffix; prefix shared across folds |
+| Full alternative fine-tuning | `finetuned`, `format_version: 1` | Self-contained encoder + heads + input specification; one full fold loaded at a time |
+
+Fine-tuned checkpoints retain `task`, `fold`, `heads`, `hparams`, `config`, `best_epoch`, and
+training-fold median, plus full adapter `encoder` state, resolved `encoder_spec`, source provenance
+(`source.sha256`, `source.checkpoint_key`) and feature identity. `encoder_spec` records kind/name,
+kwargs, pooling, dimension, native positional grid, runtime size, input transform, retinal mode and
+source identity. Inference reconstructs and strictly loads from this data without the original
+pretrained file or sidecar. Saved transform settings take precedence over `encoder.*` initialization
+settings; retinal `preprocess.mode` must agree. Optimizer resume is not implemented.
+
+Fine-tuned inference averages logits over both views and all folds, computing image features in
+memory per fold without persistent frozen caches. Mixed checkpoint kinds or incompatible fold
+specifications are rejected. `--allow-identity-mismatch` cannot bypass hard architecture/shape checks
+in legacy inference or the fine-tuned specification checks.
+
+Default DINO feature identities retain their exact historical payload. New encoder kinds and
+non-default DINO transforms use richer versioned identities covering family, architecture kwargs,
+pooling, input transform/size, source SHA-256 and wrapper selection. Feature stores compare full
+identities and row shapes. Use separate stores/runs when switching encoders or transforms.
+
+DINO heads are not compatible with alternative embeddings, even if dimensions match. A head warm
+start for full fine-tuning must be a frozen Task 1 checkpoint for the same fold, full available
+feature identity, feature dimension and configured head architecture. The new
+`finetune.init_heads_from` does not inherit `partial.init_heads_from`.
+
+## Outputs and verification
+
+The presets keep `features/{convnext,visionfm}`, `outputs/{convnext,visionfm}_heads`,
+`outputs/{convnext,visionfm}_finetune`, and `outputs/infer_{convnext,visionfm}` separate. Full training
+writes per-fold `task1.pt`, `history.json`, and `oof_task1.csv`, plus combined OOF, `summary.json`,
+`metrics.json`, resolved config and provenance. For frozen inference, override `--run-dir` to the
+corresponding `_heads` directory. Full inference uses the preset's `_finetune` default.
+
+Static syntax, configuration-schema, lint and diff checks passed for the implementation. New tests
+cover gradients/updates, strict imports, upstream parity, square/rectangular inputs, legacy DINO
+checkpoints, identities, paired flips, frozen extraction, training, serial fold inference and removal
+of source weights. They have not been run. Existing historical DINO test counts do not validate
+the current extension. Actual released OCT format, pretrained compatibility, GPU memory and
+throughput await cloud validation. See [the runbook verification commands](../RUNBOOK.md#tests-and-smoke-run).

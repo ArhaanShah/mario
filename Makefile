@@ -5,7 +5,8 @@ PY ?= python
 test:
 	$(PY) -m pytest -q
 
-# End-to-end pipeline on synthetic data with a small random-init encoder (CPU, no network).
+# DINO pipeline on synthetic data with random-init weights (CPU, no network).
+# ConvNeXt/VisionFM full fine-tuning is covered separately by test_alternative_encoders.py.
 smoke:
 	$(PY) scripts/smoke.py
 

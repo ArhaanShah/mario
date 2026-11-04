@@ -1,0 +1,30 @@
+# VisionFM OCT: Task 1 image fine-tuning, or frozen train_heads (Tasks 1-2 if configured).
+# Manually download OCT weights; release layout is unverified. See RUNBOOK.md and docs/encoders.md.
+base: task1.yaml
+encoder:
+  kind: visionfm
+  name: vit_base_patch16
+  weights: weights/VFM_OCT_weights.pth
+  img_size: [192, 512]
+  kwargs: {}
+  checkpoint_key: null  # raw backbone; explicitly select teacher/student/visionfm_state_dict for wrapped files
+  preprocessing: visionfm_oct
+features:
+  store_dir: features/visionfm
+  batch_size: 8
+train:
+  out_dir: outputs/visionfm_heads
+finetune:
+  out_dir: outputs/visionfm_finetune
+  batch_size: 8
+  lr_encoder: 1.0e-5
+  lr_heads: 1.0e-4
+  weight_decay: 1.0e-4
+  max_epochs: 10
+  patience: 3
+  max_steps: null
+  init_heads_from: null
+inference:
+  run_dir: outputs/visionfm_finetune
+  out_dir: outputs/infer_visionfm
+  batch_size: 8

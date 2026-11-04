@@ -1,10 +1,10 @@
-"""Frozen timm DINOv2 encoder, its pooling, and the prefix/suffix split used for partial fine-tuning.
+"""Offline encoder factory plus DINOv2 pooling and its partial-training prefix/suffix split.
 
 Weights are never downloaded at runtime: ``scripts/fetch_weights.py`` creates the timm model with
 ``pretrained=True`` and the same kwargs as here and saves its ``state_dict``; this module builds with
 ``pretrained=False`` and loads that file with ``strict=True``.
 
-Pooled vector = concat(CLS token, mean of patch tokens), prefix and register tokens excluded from the mean,
+DINOv2 pooled vector = concat(CLS token, mean of patch tokens), prefix and register tokens excluded from the mean,
 both after the final norm (the DINOv2 linear-evaluation pooling). For ViT-B that is 2 x 768 = 1536 values.
 """
 
@@ -94,22 +94,50 @@ def sha256_file(path: str) -> str:
     return h.hexdigest()
 
 
-def load_encoder(enc_cfg, device: torch.device | str = "cpu") -> DinoEncoder:
-    """Build from config and load the local weights strictly; frozen and in eval mode."""
-    model = build_timm_model(enc_cfg.name, enc_cfg.img_size, pretrained=False, **enc_cfg.kwargs)
+def build_encoder(enc_cfg, *, native_grid_size=14):
+    """Construct only: never open weights or download. Used by self-contained checkpoints."""
+    kind = getattr(enc_cfg, "kind", "dinov2")
+    if kind == "dinov2":
+        if "dinov2" not in enc_cfg.name:
+            raise ValueError("dinov2 requires a DINOv2 model name")
+        return DinoEncoder(build_timm_model(enc_cfg.name, enc_cfg.img_size, **enc_cfg.kwargs))
+    if kind == "convnext":
+        from .convnext import ConvNeXtEncoder, build_convnext
+        return ConvNeXtEncoder(build_convnext(enc_cfg.name, **enc_cfg.kwargs))
+    if kind == "visionfm":
+        from .visionfm import VisionFMEncoder
+        return VisionFMEncoder(enc_cfg.name, native_grid_size, **enc_cfg.kwargs)
+    raise ValueError(f"unknown encoder.kind {kind!r}")
+
+
+def load_encoder(enc_cfg, device: torch.device | str = "cpu", *, trainable=False) -> nn.Module:
+    """Load local pretrained weights strictly; frozen/eval unless explicitly trainable."""
+    state, grid = None, 14
+    kind = getattr(enc_cfg, "kind", "dinov2")
     if enc_cfg.weights is None:
-        log.warning("encoder.weights is null: using a RANDOM-INIT %s (tests only)", enc_cfg.name)
+        log.warning("encoder.weights is null: using RANDOM-INIT %s (tests only)", enc_cfg.name)
     else:
         if not os.path.isfile(enc_cfg.weights):
             raise FileNotFoundError(
-                f"encoder weights {enc_cfg.weights!r} not found; run scripts/fetch_weights.py "
-                "on a machine with network access (or --random-init for smoke tests)"
+                f"encoder weights {enc_cfg.weights!r} not found; prepare weights explicitly with "
+                "scripts/fetch_weights.py (VisionFM OCT sources must be downloaded manually)"
             )
-        state = torch.load(enc_cfg.weights, map_location="cpu", weights_only=True)
-        model.load_state_dict(state, strict=True)
-    enc = DinoEncoder(model).to(device).eval()
-    for p in enc.parameters():
-        p.requires_grad_(False)
+        if kind == "visionfm":
+            from .visionfm import load_visionfm_file
+            state = load_visionfm_file(enc_cfg.weights, enc_cfg.checkpoint_key)
+        else:
+            state = torch.load(enc_cfg.weights, map_location="cpu", weights_only=True)
+        if isinstance(state, dict) and state.get("kind") == "finetuned":
+            raise ValueError("MARIO finetuned checkpoints are run checkpoints, not pretrained encoder weights")
+        if kind == "visionfm":
+            from .visionfm import backbone_state, native_grid
+            state = backbone_state(state, enc_cfg.checkpoint_key)
+            grid = native_grid(state)
+    enc = build_encoder(enc_cfg, native_grid_size=grid)
+    if state is not None:
+        enc.model.load_state_dict(state, strict=True)
+    enc.to(device).train(trainable)
+    enc.requires_grad_(trainable)
     return enc
 
 
@@ -126,7 +154,7 @@ def weights_identity(enc_cfg) -> str | None:
 
 
 def save_weights(enc_cfg, pretrained: bool, out_path: str | None = None, seed: int = 0) -> str:
-    """Create the timm model (downloading if ``pretrained``) and save its state_dict plus a JSON sidecar."""
+    """Explicit weight preparation; VisionFM pretrained sources are imported by fetch_weights --source."""
     import timm
 
     out_path = out_path or enc_cfg.weights
@@ -134,7 +162,16 @@ def save_weights(enc_cfg, pretrained: bool, out_path: str | None = None, seed: i
         raise ValueError("no output path: set encoder.weights or pass out_path")
     if not pretrained:
         torch.manual_seed(seed)
-    model = build_timm_model(enc_cfg.name, enc_cfg.img_size, pretrained=pretrained, **enc_cfg.kwargs)
+    kind = getattr(enc_cfg, "kind", "dinov2")
+    if kind == "convnext":
+        from .convnext import build_convnext
+        model = build_convnext(enc_cfg.name, pretrained=pretrained, **enc_cfg.kwargs)
+    elif kind == "visionfm":
+        if pretrained:
+            raise ValueError("download official OCT weights manually; use --source to import a local checkpoint")
+        model = build_encoder(enc_cfg).model
+    else:
+        model = build_timm_model(enc_cfg.name, enc_cfg.img_size, pretrained=pretrained, **enc_cfg.kwargs)
     os.makedirs(os.path.dirname(os.path.abspath(out_path)), exist_ok=True)
     tmp = out_path + ".tmp"
     torch.save(model.state_dict(), tmp)
@@ -152,3 +189,14 @@ def save_weights(enc_cfg, pretrained: bool, out_path: str | None = None, seed: i
     with open(out_path + ".json", "w", encoding="utf-8") as f:
         json.dump(sidecar, f, indent=2)
     return out_path
+
+
+def source_provenance(enc_cfg):
+    """Keep the original external source identity after optional canonical import."""
+    source = {"sha256": weights_identity(enc_cfg), "checkpoint_key": enc_cfg.checkpoint_key}
+    if enc_cfg.weights and os.path.isfile(enc_cfg.weights + ".json"):
+        with open(enc_cfg.weights + ".json", encoding="utf-8") as f:
+            side = json.load(f)
+        if side.get("source_sha256"):
+            source = {"sha256": side["source_sha256"], "checkpoint_key": side.get("source_checkpoint_key")}
+    return source

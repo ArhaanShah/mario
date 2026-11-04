@@ -128,3 +128,23 @@ def test_infer_validates_csv(pipeline, tmp_path):
     pd.read_csv(cfg.data.task2_train_csvs[0]).drop(columns=["case"]).to_csv(bad, index=False)
     with pytest.raises(schema.SchemaError):
         run_inference(cfg, 2, str(bad))
+
+
+
+def test_old_schema_dino_checkpoints_keep_predictions(pipeline, tmp_path):
+    """Missing kind and all newly introduced config fields retain legacy DINO semantics."""
+    cfg, enc = pipeline
+    original, _ = MarioModelDINO.from_run(cfg.train.out_dir, 1, enc)
+    for k in range(4):
+        c = torch.load(os.path.join(cfg.train.out_dir, f"fold{k}", "task1.pt"), weights_only=False)
+        c.pop("kind", None)
+        c["config"].pop("finetune", None)
+        for field in ("kind", "checkpoint_key", "preprocessing"):
+            c["config"]["encoder"].pop(field, None)
+        folder = tmp_path / f"fold{k}"
+        folder.mkdir()
+        torch.save(c, folder / "task1.pt")
+    restored, _ = MarioModelDINO.from_run(str(tmp_path), 1, enc)
+    frame = pd.read_csv(cfg.data.task1_train_csvs[0]).head(2)
+    a, b = [_images_tensor(cfg, list(frame[column])) for column in ("image_at_ti", "image_at_ti+1")]
+    torch.testing.assert_close(original.forward_task1(a, b), restored.forward_task1(a, b), rtol=0, atol=0)

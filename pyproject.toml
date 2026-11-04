@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "mario-dino"
 version = "0.1.0"
-description = "MARIO Tasks 1-2: frozen DINOv2 features, a GRU feature forecaster and a shared fusion head."
+description = "MARIO Tasks 1-2: DINOv2, ConvNeXt or VisionFM encoders, a GRU feature forecaster and a shared fusion head."
 readme = "RUNBOOK.md"
 requires-python = ">=3.10"
 dependencies = []
@@ -46,8 +46,11 @@ pythonpath = ["."]
 [tool.ruff]
 target-version = "py310"
 line-length = 110
-extend-exclude = ["third_party"]
+extend-exclude = ["third_party", "mario_dino/models/vendor", "tests/fixtures"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "B", "UP"]
 ignore = ["E501", "B905"]
+
+[tool.setuptools.package-data]
+"mario_dino.models.vendor" = ["VisionFM-LICENSE"]
