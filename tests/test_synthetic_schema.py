@@ -69,6 +69,32 @@ def test_validator_rejects_missing_image(synth):
         schema.validate(df, 2, image_root=synth["images"])
 
 
+def test_image_roots_search_fallback_directories(synth, tmp_path):
+    task2 = pd.read_csv(synth["csv"]["task2_train"]).iloc[[0]]
+    image = task2.iloc[0]["image"]
+    primary = tmp_path / "primary"
+    fallback = tmp_path / "fallback"
+    primary.mkdir()
+    fallback.mkdir()
+    source = os.path.join(synth["images"], image)
+    fallback_image = fallback / image
+    with open(source, "rb") as src, open(fallback_image, "wb") as dst:
+        dst.write(src.read())
+
+    roots = [str(primary), str(fallback)]
+    schema.validate(task2, 2, image_root=roots)
+    kept, unreadable = schema.exclude_unreadable_rows(task2, 2, roots)
+
+    assert unreadable == []
+    assert len(kept) == 1
+    assert schema.image_path(roots, image) == str(fallback_image)
+    assert schema.readable_image_path(roots, image) == str(fallback_image)
+    primary_image = primary / image
+    with open(source, "rb") as src, open(primary_image, "wb") as dst:
+        dst.write(src.read())
+    assert schema.image_path(roots, image) == str(primary_image)
+
+
 def test_validator_rejects_bad_labels(synth):
     df = pd.read_csv(synth["csv"]["task2_train"])
     df.loc[0, "label"] = 3  # Task 2 has 3 classes

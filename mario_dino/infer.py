@@ -78,13 +78,13 @@ def run_inference(
     run_dir = run_dir or ic.run_dir
     out_dir = out_dir or ic.out_dir
     method = ic.method if method is None else method
-    df = schema.read_csv(csv_path, task, image_root=cfg.data.image_root, require_label=False)
+    df = schema.read_csv(csv_path, task, image_root=cfg.data.image_roots, require_label=False)
     labelled = schema.has_labels(df)
     images = schema.unique_images([(task, df)])
     log.info("Task %d: %d rows, %d unique images, labels: %s", task, len(df), len(images), labelled)
 
     # 1. OCTIP cache for this CSV's images (skips cached files)
-    build_cache(images, cfg.data.image_root, cfg.preprocess.cache_dir, cfg.preprocess.mode,
+    build_cache(images, cfg.data.image_roots, cfg.preprocess.cache_dir, cfg.preprocess.mode,
                 cfg.preprocess.octip_weights_dir, cfg.preprocess.octip_batch_size)
 
     # 2. model and per-image features

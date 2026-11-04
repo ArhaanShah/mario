@@ -4,6 +4,8 @@ device: cpu
 
 data:
   image_root: smoke_out/data/images
+  image_fallback_roots: []
+  include_image_dirs: []
   task1_train_csvs: [smoke_out/data/csv/df_task1_train.csv]
   task2_train_csvs: [smoke_out/data/csv/df_task2_train.csv]
   extra_csvs:

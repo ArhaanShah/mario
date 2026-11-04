@@ -45,6 +45,30 @@ def test_collect_images_skips_rows_with_unreadable_scans(synth, tmp_path):
     assert all(cv2.imread(os.path.join(image_root, image), cv2.IMREAD_GRAYSCALE) is not None for image in images)
 
 
+def test_collect_images_searches_fallback_roots(synth, tmp_path):
+    task2_csv = synth["csv"]["task2_train"]
+    roots = [str(tmp_path / "primary"), synth["images"]]
+
+    images = collect_images([task2_csv], roots)
+
+    expected = sorted(pd.read_csv(task2_csv)["image"].astype(str).unique())
+    assert images == expected
+
+
+def test_collect_images_includes_unlisted_directory_files(synth, tmp_path):
+    task2_csv = synth["csv"]["task2_train"]
+    included = tmp_path / "include"
+    included.mkdir()
+    extra_image = "UNLISTED.png"
+    shutil.copyfile(os.path.join(synth["images"], _images(synth, 1)[0]), included / extra_image)
+    (included / "notes.txt").write_text("not an image", encoding="utf-8")
+
+    images = collect_images([task2_csv], include_dirs=[str(included)])
+
+    expected = sorted(set(pd.read_csv(task2_csv)["image"].astype(str)) | {extra_image})
+    assert images == expected
+
+
 def test_raw_mode_copies_and_skips_existing(synth, tmp_path):
     imgs = _images(synth, 6)
     cache = str(tmp_path / "cache")
@@ -54,6 +78,22 @@ def test_raw_mode_copies_and_skips_existing(synth, tmp_path):
         assert filecmp.cmp(cache_path(cache, "raw", im), os.path.join(synth["images"], im), shallow=False)
     s2 = build_cache(imgs, synth["images"], cache, "raw")
     assert s2["cached_before"] == 6 and s2["written"] == 0
+
+
+def test_raw_mode_uses_fallback_image_root(synth, tmp_path):
+    image = _images(synth, 1)[0]
+    primary = tmp_path / "primary"
+    fallback = tmp_path / "fallback"
+    primary.mkdir()
+    fallback.mkdir()
+    source = os.path.join(synth["images"], image)
+    shutil.copyfile(source, fallback / image)
+    cache = str(tmp_path / "cache")
+
+    result = build_cache([image], [str(primary), str(fallback)], cache, "raw")
+
+    assert result["written"] == 1 and result["failed"] == 0
+    assert filecmp.cmp(cache_path(cache, "raw", image), source, shallow=False)
 
 
 def test_raw_mode_records_failures(synth, tmp_path):

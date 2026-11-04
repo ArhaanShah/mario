@@ -24,12 +24,18 @@ MODES = ("octip", "classic", "raw")
 @dataclass
 class DataCfg:
     image_root: str = "data/images"
+    image_fallback_roots: list[str] = field(default_factory=list)
+    include_image_dirs: list[str] = field(default_factory=list)
     task1_train_csvs: list[str] = field(default_factory=list)
     task2_train_csvs: list[str] = field(default_factory=list)
     # val/test CSVs whose images should also be cached and encoded
     extra_csvs: list[str] = field(default_factory=list)
     splits: str = "outputs/splits.json"
     n_folds: int = 4
+
+    @property
+    def image_roots(self) -> list[str]:
+        return [self.image_root, *self.image_fallback_roots]
 
 
 @dataclass

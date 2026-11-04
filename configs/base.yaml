@@ -9,7 +9,9 @@ class_names:
   task2: [reduced, stable, worsened]
 
 data:
-  image_root: Task_1/train                   # Task 2 training scans are also present here
+  image_root: Task_2/train                   # Primary source; fallback roots are searched next
+  image_fallback_roots: [Task_1/train]       # Search here when an image is not in the primary folder
+  include_image_dirs: [Task_2/train]         # Cache folder images even when no training CSV references them
   task1_train_csvs: [Task_1/df_task1_train.csv]
   # The available Task 2 CSV omits id_patient; training derives it from Task 1 image_at_ti matches.
   task2_train_csvs: [Task_2/df_task2_train.csv]

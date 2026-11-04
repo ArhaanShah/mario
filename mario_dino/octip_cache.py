@@ -46,8 +46,12 @@ def missing_weight_files(weights_dir: str) -> list[str]:
     return [f for f in OCTIP_WEIGHT_FILES if not os.path.isfile(os.path.join(weights_dir, f))]
 
 
-def collect_images(csv_paths: Sequence[str], image_root: str | None = None) -> list[str]:
-    """Sorted unique B-scan names over Task 1 and Task 2 CSVs (task detected from columns)."""
+def collect_images(
+    csv_paths: Sequence[str],
+    image_root: str | Sequence[str] | None = None,
+    include_dirs: Sequence[str] = (),
+) -> list[str]:
+    """Sorted unique B-scan names from CSVs and explicitly included image directories."""
     dfs = []
     for p in csv_paths:
         df = pd.read_csv(p)
@@ -65,7 +69,18 @@ def collect_images(csv_paths: Sequence[str], image_root: str | None = None) -> l
                 )
             df = kept
         dfs.append((task, df))
-    return schema.unique_images(dfs)
+    images = set(schema.unique_images(dfs))
+    for directory in include_dirs:
+        if not os.path.isdir(directory):
+            raise FileNotFoundError(f"configured image directory does not exist: {directory!r}")
+        with os.scandir(directory) as entries:
+            images.update(
+                entry.name
+                for entry in entries
+                if entry.is_file() and os.path.splitext(entry.name)[1].lower() in
+                {".png", ".jpg", ".jpeg", ".tif", ".tiff", ".bmp"}
+            )
+    return sorted(images)
 
 
 def _import_octip(third_party: str = THIRD_PARTY):
@@ -211,7 +226,7 @@ def _append_failures(path: str, rows: list[list[str]]) -> None:
 
 def build_cache(
     images: Sequence[str],
-    image_root: str,
+    image_root: str | Sequence[str],
     cache_dir: str,
     mode: str = "raw",
     weights_dir: str | None = None,
@@ -236,8 +251,8 @@ def build_cache(
     if mode == "raw":
         fails = []
         for im in pending:
-            src = schema.image_path(image_root, im)
-            if not os.path.isfile(src) or cv2.imread(src, cv2.IMREAD_GRAYSCALE) is None:
+            src = schema.readable_image_path(image_root, im)
+            if src is None:
                 fails.append([now, im, "read", "missing or unreadable", "skipped"])
                 continue
             _atomic_copy(src, cache_path(cache_dir, mode, im))
@@ -256,7 +271,11 @@ def build_cache(
         backend = OctipBackend(weights_dir or "", batch_size)
     for start in range(0, len(pending), batch_size):
         batch = pending[start : start + batch_size]
-        results = backend.process([schema.image_path(image_root, im) for im in batch])
+        paths = [
+            schema.readable_image_path(image_root, im) or schema.image_path(image_root, im)
+            for im in batch
+        ]
+        results = backend.process(paths)
         fails = []
         for im, (img, notes) in zip(batch, results):
             for stage, err, action in notes:
@@ -282,10 +301,10 @@ def main(argv: list[str] | None = None) -> None:
     cfg = load_from_args(args)
     mode = args.mode or cfg.preprocess.mode
     csvs = args.csv or (cfg.data.task1_train_csvs + cfg.data.task2_train_csvs + cfg.data.extra_csvs)
-    images = collect_images(csvs, cfg.data.image_root)
+    images = collect_images(csvs, cfg.data.image_roots, cfg.data.include_image_dirs)
     stats = build_cache(
         images,
-        cfg.data.image_root,
+        cfg.data.image_roots,
         cfg.preprocess.cache_dir,
         mode,
         weights_dir=cfg.preprocess.octip_weights_dir,

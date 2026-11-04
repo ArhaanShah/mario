@@ -96,6 +96,10 @@ Default, no weights needed (main env):
 python -m mario_dino.octip_cache --config configs/base.yaml        # preprocess.mode: classic
 ```
 
+The base config also sets `data.include_image_dirs: [Task_2/train]`, so every supported image file in that
+folder is cached even if it is absent from the training CSVs. The cache key is the image filename, and
+already-cached files are skipped on subsequent runs.
+
 `classic` mode runs DF41's unmodified OCTIP `PreProcessor`, which flattens the retina, crops it to 200 rows,
 drops bad A-scans and normalises intensity. Its retina masks come from two learning-free localizers in
 `mario_dino/retina.py` instead of OCTIP's two FPN networks. The PreProcessor only uses each mask's top

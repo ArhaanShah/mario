@@ -96,13 +96,13 @@ def load_training_data(cfg: Config, store_dir: str | None = None):
     """(features [n_images, 2, d] fp16 tensor, Task1Data | None, Task2Data | None, store meta)."""
     store = FeatureStore.open_existing(store_dir or cfg.features.store_dir)
     splits = load_splits(cfg.data.splits)
-    kw = dict(image_root=cfg.data.image_root, check_images=False)
+    kw = dict(image_root=cfg.data.image_roots, check_images=False)
     t1 = t2 = None
     task1_df = None
     task1_source_df = None
     if cfg.data.task1_train_csvs:
         task1_source_df = schema.read_csvs(cfg.data.task1_train_csvs, 1, **kw)
-        task1_df, unreadable = schema.exclude_unreadable_rows(task1_source_df, 1, cfg.data.image_root)
+        task1_df, unreadable = schema.exclude_unreadable_rows(task1_source_df, 1, cfg.data.image_roots)
         if unreadable:
             log.warning(
                 "excluding %d Task 1 row(s) referencing %d unreadable image(s): %s",
@@ -116,7 +116,7 @@ def load_training_data(cfg: Config, store_dir: str | None = None):
         if task1_source_df is None:
             raise ValueError("Task 2 training needs Task 1 rows to derive patient-grouped folds")
         task2_df = schema.attach_task2_patients(task2_source_df, task1_source_df)
-        task2_df, unreadable = schema.exclude_unreadable_rows(task2_df, 2, cfg.data.image_root)
+        task2_df, unreadable = schema.exclude_unreadable_rows(task2_df, 2, cfg.data.image_roots)
         if unreadable:
             log.warning(
                 "excluding %d Task 2 row(s) referencing %d unreadable image(s): %s",
