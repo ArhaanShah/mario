@@ -26,7 +26,7 @@ def main() -> None:
                 {
                     "run": d,
                     "task": task,
-                    **m["ablation"],
+                    **m.get("ablation", {}),
                     "fold_mcc_mean": sum(fold_mcc) / len(fold_mcc),
                     "fold_mcc_min": min(fold_mcc),
                     **{f"oof_{k}": v for k, v in m[task]["oof"].items()},

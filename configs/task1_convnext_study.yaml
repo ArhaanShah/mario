@@ -1,0 +1,17 @@
+# Preparation input. Run `python -m mario_dino.study --config ...` FIRST.
+# Generated per-seed configs enable the research protocol and saved split paths.
+base: task1_convnext.yaml
+data:
+  task2_train_csvs: []
+model:
+  fusion: legacy
+  fusion_hidden: 256
+train:
+  select_metric: mcc
+finetune:
+  out_dir: outputs/convnext_study_unprepared
+  init_heads_from: null
+research:
+  protocol: grouped_holdout
+  inner_splits: outputs/convnext_study/inner_splits.json
+  cohort_manifest: outputs/convnext_study/cohort.json

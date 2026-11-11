@@ -1,0 +1,12 @@
+# Opt-in Task 1 architecture preset. For paper evaluation use generated study configs.
+base: task1_convnext.yaml
+data:
+  task2_train_csvs: []
+model:
+  fusion: delta_mlp
+  fusion_hidden: 256
+finetune:
+  out_dir: outputs/convnext_delta_mlp
+inference:
+  run_dir: outputs/convnext_delta_mlp
+  out_dir: outputs/infer_convnext_delta_mlp

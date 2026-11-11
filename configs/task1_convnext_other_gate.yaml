@@ -1,0 +1,12 @@
+# OTHER includes uninterpretable AND mixed changes: this is not a quality detector.
+base: task1_convnext.yaml
+data:
+  task2_train_csvs: []
+model:
+  fusion: other_gate
+  fusion_hidden: 256
+finetune:
+  out_dir: outputs/convnext_other_gate
+inference:
+  run_dir: outputs/convnext_other_gate
+  out_dir: outputs/infer_convnext_other_gate

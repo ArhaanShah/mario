@@ -3,7 +3,9 @@
 This describes the implemented encoder extension. For setup, downloads and cloud commands, see
 [the runbook](../RUNBOOK.md#alternative-task-1-encoders-convnext-and-visionfm-oct).
 The [original implementation plan](implementation-plan.md) describes the historical DINO baseline.
-The new runtime tests and released pretrained binaries have not been executed/validated in this session.
+For experimental Task 1 heads, artifact reporting and the inner-selection/refit protocol, see
+[the benchmark guide](convnext-benchmark.md). The completed checks include 31 artifact-only tests;
+alternative-encoder/fusion model tests and real pretrained compatibility remain unvalidated here.
 
 ## Supported workflows
 
@@ -13,9 +15,10 @@ The new runtime tests and released pretrained binaries have not been executed/va
 | `convnext` | `convnext_tiny.in12k_ft_in1k` | Tasks 1–2 | Rejected; use `train_finetune` | Task 1, full encoder + heads |
 | `visionfm` | `vit_base_patch16` | Tasks 1–2 | Rejected; use `train_finetune` | Task 1, full encoder + heads |
 
-Task 2 image-based end-to-end training is outside this extension. The new Task 1 presets inherit
-the base data configuration, including its Task 2 CSV: the optional frozen `train_heads` path runs
-both stages when that CSV is configured. The full fine-tuning trainer reads Task 1 pairs only.
+Task 2 image-based end-to-end training is outside this extension. The original
+`task1_convnext.yaml` and `task1_visionfm.yaml` presets inherit the base Task 2 CSV: optional frozen
+`train_heads` training runs both stages when that CSV is configured. Experimental fusion and study
+presets disable Task 2 CSVs. Full image fine-tuning reads Task 1 pairs only.
 
 ## Configuration and preprocessing
 
@@ -58,6 +61,28 @@ its own heads/optimizer. Class weights and time scaling use training-fold rows. 
 when enabled and supported; otherwise training uses fp32. These defaults are starting settings,
 with no measured accuracy or cloud memory guarantee.
 
+### Task 1 fusion and research configuration
+
+| Field | Default | Behavior |
+| --- | --- | --- |
+| `model.fusion` | `legacy` | Existing pair head; `delta_mlp` and `other_gate` opt into experimental Task 1 heads |
+| `model.fusion_hidden` | `256` | Hidden width for experimental fusion heads |
+| `research.protocol` | `legacy` | Existing fold-validation selection; `grouped_holdout` enables inner selection and fresh refit |
+| `research.inner_splits` | `null` | Saved deterministic patient partitions produced by study preparation |
+| `research.cohort_manifest` | `null` | Saved cohort/source hashes produced by study preparation |
+
+Experimental heads require `model.head_input=pair` and no Task 2 training CSVs. Their encoder features
+and pooling remain unchanged. The OTHER gate composes four-class log probabilities from an OTHER
+decision and conditional three-class progression probabilities; the label is not a quality-only label.
+
+The research protocol requires ConvNeXt, four outer patient folds, local pretrained weights, MCC
+selection, fresh heads and no step cap. It uses 20% of outer-training patients for epoch selection,
+then refits a fresh model on all outer-training patients for the selected epoch count. Outer evaluation
+runs once after refit. Warm starts and cached-feature/partial trainers are rejected for this protocol.
+Use `python -m mario_dino.study --config configs/task1_convnext_study.yaml` to prepare the 12
+seed/variant configs without running models. The [benchmark guide](convnext-benchmark.md#prepare-the-locked-future-study)
+documents preparation, provenance checks, future execution and reporting.
+
 ## Adapter interface and weights
 
 `models/encoder.py` remains the public entry point. `build_encoder(enc_cfg, native_grid_size=14)`
@@ -90,6 +115,7 @@ Optional VisionFM `--source` conversion writes canonical raw weights and a SHA-2
 wrapper is selected (PyTorch >=2.4); there is no unrestricted-pickle fallback for external encoder
 weights. Production missing/malformed weights never silently become random initialization.
 Explicit null weights or `--random-init` remain test-fixture options.
+The research protocol requires a local pretrained source and rejects null weights.
 
 ## Checkpoint and cache compatibility
 
@@ -106,6 +132,12 @@ kwargs, pooling, dimension, native positional grid, runtime size, input transfor
 source identity. Inference reconstructs and strictly loads from this data without the original
 pretrained file or sidecar. Saved transform settings take precedence over `encoder.*` initialization
 settings; retinal `preprocess.mode` must agree. Optimizer resume is not implemented.
+
+Legacy heads retain their existing hyperparameter payload and state-dict keys. Experimental heads
+store `fusion` and `fusion_hidden` in `hparams`; missing fusion fields reconstruct the legacy head.
+Strict head-state loading and cross-fold architecture checks still apply. Checkpoint format version 1
+is retained. Gate outputs use the existing score-averaging path, so averaging across views/folds
+combines log probabilities geometrically before normalization.
 
 Fine-tuned inference averages logits over both views and all folds, computing image features in
 memory per fold without persistent frozen caches. Mixed checkpoint kinds or incompatible fold
@@ -130,9 +162,19 @@ writes per-fold `task1.pt`, `history.json`, and `oof_task1.csv`, plus combined O
 `metrics.json`, resolved config and provenance. For frozen inference, override `--run-dir` to the
 corresponding `_heads` directory. Full inference uses the preset's `_finetune` default.
 
-Static syntax, configuration-schema, lint and diff checks passed for the implementation. New tests
-cover gradients/updates, strict imports, upstream parity, square/rectangular inputs, legacy DINO
-checkpoints, identities, paired flips, frozen extraction, training, serial fold inference and removal
-of source weights. They have not been run. Existing historical DINO test counts do not validate
-the current extension. Actual released OCT format, pretrained compatibility, GPU memory and
-throughput await cloud validation. See [the runbook verification commands](../RUNBOOK.md#tests-and-smoke-run).
+Standalone experimental presets use `outputs/convnext_delta_mlp` and `outputs/convnext_other_gate`.
+Prepared study runs use `outputs/convnext_study/runs/seed{seed}/{variant}` by default. Within a study
+fold, `selection/` stores the inner-selected checkpoint/history, `refit/` stores the refit history and
+checkpoint reference, and `task1.pt` is the final self-contained checkpoint. Each phase records fitting
+patients, class support, time scale, parameter count and checkpoint hash. Nonempty research run
+directories are refused; study preparation never launches training.
+
+Current scaffolding verification passed 31 artifact-only tests plus syntax, configuration, lint,
+notebook-structure, CLI-help and diff checks. Those tests validate reporting and patient-split logic;
+they do not validate encoders or training. The written model tests cover gradients/updates, strict
+imports, upstream parity, transforms, identities, paired views, training, inference reconstruction,
+legacy checkpoints and gate normalization. They remain unexecuted here. Actual released OCT format,
+pretrained compatibility, GPU memory/throughput and the new trainer require later cloud/CI validation.
+See [the runbook verification commands](../RUNBOOK.md#tests-and-smoke-run) and
+[the evidence report](results/convnext_task1/notebook_evidence.md) for the separately recorded historical
+real-data results; those saved outputs do not establish correctness of the new scaffolding.

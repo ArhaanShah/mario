@@ -11,6 +11,13 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
+benchmark = [
+    "numpy>=1.24",
+    "pandas>=2.0",
+    "scikit-learn>=1.2",
+    "matplotlib>=3.6",
+    "PyYAML>=6.0",
+]
 # Main env: never imports TensorFlow. Exact pins live in requirements/main.txt.
 main = [
     "torch>=2.1",
@@ -41,6 +48,7 @@ include = ["mario_dino*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-ra"
+markers = ["model_execution: constructs or executes models; exclude during scaffolding validation"]
 pythonpath = ["."]
 
 [tool.ruff]

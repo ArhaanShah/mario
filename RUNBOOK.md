@@ -1,5 +1,9 @@
 # MARIO Tasks 1–2: encoders + GRU forecaster — runbook
 
+For Task 1 artifact-only benchmarking, the saved ConvNeXt result audit, experimental fusion heads,
+and preparation of the future selection/refit study, see [the benchmark guide](docs/convnext-benchmark.md).
+Its reporting and preparation commands do not execute models. The model commands below do.
+
 What this repo does, in one line per task:
 
 - **Task 1** (4 classes): `head(f_t, f_{t+Δt})` on encoder features of both visits.
@@ -228,6 +232,37 @@ docker run --rm --network none --entrypoint python mario-dino scripts/smoke.py -
 
 ---
 
+## Task 1 reports and study preparation
+
+Use the reporting-only environment for artifact analysis and study definitions:
+
+```bash
+pip install -e ".[benchmark]" pytest
+make benchmark-check
+python -m scripts.notebook_evidence
+```
+
+Without `make`, the artifact check is
+`python -m pytest --noconftest tests/test_benchmark_artifacts.py -q -p no:cacheprovider`.
+These commands execute no models. The committed
+[evidence report](docs/results/convnext_task1/notebook_evidence.md) records the saved ConvNeXt Task 1
+scores and OTHER-class failure; it cannot supply patient uncertainty or calibration without raw OOF.
+
+After configuring the real Task 1 CSVs and existing outer splits, prepare the study with
+`python -m mario_dino.study --config configs/task1_convnext_study.yaml`.
+Preparation saves the cohort and inner patient partitions, writes 12 configs for three seeds and
+four variants, and prints the experiment matrix. It does not launch those experiments.
+Generated runs use inner MCC for epoch selection, then fresh refit and one outer-fold evaluation.
+Passing a generated config to `train_finetune` later **does execute models**.
+
+For existing artifacts, use `python -m mario_dino.benchmark --run NAME=RUN_DIR --splits SPLIT_FILE --out-dir REPORT_DIR`.
+For the complete prepared study, use
+`python -m mario_dino.benchmark --study outputs/convnext_study/study.json --out-dir outputs/convnext_study_report`.
+Both reporting commands read artifacts only. The
+[benchmark guide](docs/convnext-benchmark.md) specifies matching cohorts, optional metadata,
+patient bootstrap uncertainty, strict study provenance and output formats. Raw real-run artifacts
+are not included here, so these full reports await those files.
+
 ## Tests and smoke run
 
 ```bash
@@ -238,14 +273,32 @@ make lint
 ```
 
 On Windows without `make`: `python -m pytest -q` and `python scripts/smoke.py`.
-These commands execute CPU models. `make smoke` remains the original DINO pipeline; it does not
-exercise ConvNeXt/VisionFM full fine-tuning. New runtime tests are in
-`tests/test_alternative_encoders.py`, with an old-schema DINO regression in `tests/test_infer.py`.
-They have not been executed in this implementation session; run them later on cloud/CI.
+`make test`, `make smoke` and their Python equivalents execute CPU models. `make lint` does not.
+`make smoke` remains the original DINO pipeline; it does not exercise ConvNeXt/VisionFM full
+fine-tuning. Model tests are in `tests/test_alternative_encoders.py` and `tests/test_fusion_models.py`,
+with an old-schema DINO regression in `tests/test_infer.py`. These model checks were not executed
+for the scaffolding change; run them later on cloud/CI. The `model_execution` marker covers the new
+fusion test file only; filtering on that marker does not make the whole suite model-free.
 `OCTIP_WEIGHTS_DIR=/path/to/octip_models make test` runs the real OCTIP test when the octip packages are
 installed in the same env.
 
 ## Status: what was and was not run
+
+The November 12, 2026 benchmark/scaffolding validation completed:
+
+- **31 artifact-only tests passed**, including metric reconstruction, challenge specificity parity,
+  paired patient sampling, report generation, three-seed summaries, cohort/provenance guards and split isolation.
+- Repository Ruff checks, Python syntax, configuration loading, notebook JSON structure, CLI help
+  and diff whitespace checks passed.
+- The notebook-evidence Markdown, JSON, CSV and figure were generated from saved outputs. Neither
+  notebook was executed or modified. No encoder or model was constructed for these checks.
+
+Saved notebook outputs record earlier real-data runs: ConvNeXt Task 1 MCC 0.5860 and OTHER recall
+38.5%; retraining heads reports MCC 0.5903. The audit is in
+[the evidence report](docs/results/convnext_task1/notebook_evidence.md). These are historical,
+validation-selected results from different model/cohort settings, not new independent benchmark
+measurements or evidence that the experimental heads improve scores. Raw OOF files, histories,
+checkpoints and the real patient split file are absent from this checkout.
 
 Historical DINO baseline results recorded before the alternative-encoder extension
 (Windows, Python 3.12, torch 2.14.1+cpu, timm 1.0.30):
@@ -258,19 +311,19 @@ Historical DINO baseline results recorded before the alternative-encoder extensi
   resolve (`requirements/*.lock.txt`).
 - `check_label_alignment.py` on DF41's val CSVs reproduces 2140/3822 (56%).
 
-The above count is historical, not a current-suite result. For the ConvNeXt/VisionFM extension,
-static syntax, dataclass/YAML schema, lint, package metadata/license inclusion and diff checks passed.
-Static comparisons also confirmed unchanged DINO helpers/default transforms and matching pinned
-VisionFM positional interpolation. No model construction/loading, CPU/GPU execution, optimizer steps,
-pytest or pretrained binary downloads were performed. New regression tests await cloud/CI execution;
-released OCT checkpoint format and actual pretrained compatibility remain unverified.
+The 60-test count is historical, not a result for the current full suite. The initial ConvNeXt/VisionFM
+implementation received static checks, including unchanged DINO helpers/default transforms and pinned
+VisionFM positional interpolation. The later 31 artifact tests validate reporting and split logic;
+they do not validate encoder execution, fusion gradients, checkpoint reconstruction or selection/refit training.
 
-Not run, by design or for lack of assets:
+Not performed for the scaffolding change; still requiring later validation:
 
-- Pretrained weight download (`fetch_weights.py` without `--random-init`): left for the GPU machine.
-- `--mode octip`: no OCTIP weight files (request-only) and no TensorFlow env here. `--mode classic` was
-  run (tests and smoke), but only on synthetic B-scans, never on real OCT.
-- Any GPU step, and anything on real MARIO data. No metrics on real data exist in this repo.
+- Model construction/loading, forwards/backwards, optimizer steps, training, feature extraction,
+  inference and the model execution tests. No new scores were measured for the experimental heads.
+- Pretrained downloads and real-binary compatibility checks, including the released VisionFM OCT layout.
+- Real OCTIP execution with request-only weights/TensorFlow. Historical local `classic` checks used
+  synthetic scans; the saved notebook separately records preprocessing performed elsewhere on real data.
+- GPU memory, throughput and execution of the selection/refit protocol on real MARIO data.
 - `docker build` (downloads ~2 GB of TensorFlow + torch wheels) and the in-image run.
 - A Python 3.10 interpreter: code targets 3.10 (ruff `target-version = "py310"`) but was executed on 3.12.
 
@@ -299,13 +352,17 @@ Relative to [docs/implementation-plan.md](docs/implementation-plan.md):
 - **Alternative encoders**: ConvNeXt/VisionFM adapters, shared transform specs, image-based Task 1
   full fine-tuning and self-contained fold checkpoints extend the original frozen DINO scope.
   Existing DINO defaults and identity payloads are retained. See [docs/encoders.md](docs/encoders.md).
+- **Task 1 research scaffold**: artifact-only evaluation, nonlinear fusion and OTHER-gate heads,
+  and inner-selection/fresh-refit study definitions extend the encoder work. Model runs remain
+  deferred; [the benchmark guide](docs/convnext-benchmark.md) defines the protocol and evidence limits.
 
 ## Open questions (resolve before step 3)
 
 - [ ] Unit of `delta_t`, and the Task 2 prediction horizon. Δt₀ defaults to the training median until known
       (`train.delta_t0`).
-- [ ] Class names for indices 0–3. `class_names` in `configs/base.yaml` holds the usual MARIO reading
-      (reduced, stable, worsened, other), unconfirmed. Code uses indices only.
+- [x] Task 1 class names for indices 0–3: reduced, stable, worsened, other, confirmed against the
+      [official Task 1 definitions](https://youvenz.github.io/MARIO_challenge.github.io/docs/compose/task1/).
+      OTHER includes uninterpretable scans and mixed changes. Code uses indices only.
 - [ ] Task 2 label definition, given only 56% agreement with the Task 1 label of the same starting image.
 - [ ] Optional: request the two OCTIP weight files from the OCTIP author (gwenole.quellec@inserm.fr, per
       [leto-atreides-2/octip](https://github.com/leto-atreides-2/octip)) to compare `octip` against `classic`.
@@ -329,16 +386,19 @@ Relative to [docs/implementation-plan.md](docs/implementation-plan.md):
 | `mario_dino/models/finetuned.py` | resolved encoder specifications and self-contained checkpoint reconstruction |
 | `mario_dino/store.py` | append-only resumable memmap store (features and token caches) |
 | `mario_dino/features.py` | CLI: unique images → feature store |
-| `mario_dino/models/heads.py` | `Forecaster`, `FusionHead`, ablation heads, `MarioHeads` |
+| `mario_dino/models/heads.py` | forecaster, legacy/experimental Task 1 fusion heads, ablations, `MarioHeads` |
 | `mario_dino/losses.py` | class weights, forecasting MSE (detached target), stage A/B losses |
 | `mario_dino/train_heads.py` | CLI: CPU training per fold, OOF predictions, metrics |
 | `mario_dino/train_partial.py` | CLI: DINO-only partial fine-tune on cached prefix tokens |
 | `mario_dino/train_finetune.py` | CLI: ConvNeXt/VisionFM full Task 1 fine-tuning from image pairs, OOF/metrics/checkpoints |
+| `mario_dino/train_research.py` | opt-in Task 1 inner selection, fresh refit and one outer evaluation |
+| `mario_dino/study.py` | model-free cohort/split validation, study manifests and generated configs |
+| `mario_dino/benchmark.py` | model-free OOF metrics, patient bootstrap, failure reports and seed summaries |
 | `mario_dino/models/full.py` | `MarioModelDINO` inference and differentiable encoder/head `Task1Net` |
 | `mario_dino/infer.py` | CLI: frozen/partial/full-fold ensemble → results CSV (DF41 format) |
 | `mario_dino/scoring.py` | DF41 `specificity` + challenge metrics |
 | `mario_dino/synthetic.py` | synthetic dataset and planted feature store |
-| `scripts/` | `make_synthetic_data`, `fetch_weights`, `check_label_alignment`, `compare_runs`, `smoke` |
+| `scripts/` | data/weight helpers, alignment/run comparison, notebook evidence regeneration, smoke |
 
 ## Alternative Task 1 encoders: ConvNeXt and VisionFM OCT
 
@@ -346,6 +406,8 @@ Use `configs/task1_convnext.yaml` or `configs/task1_visionfm.yaml`. Both support
 feature extraction followed by `train_heads`, or full encoder/head training with
 `train_finetune`. Fine-tuning is Task 1 only. `train_partial` remains DINOv2-only.
 Existing DINO configurations, pooling, feature identities and checkpoint defaults remain compatible.
+These original presets retain legacy validation-fold checkpoint selection. For separate inner selection
+and outer evaluation, use the [prepared research study](docs/convnext-benchmark.md#prepare-the-locked-future-study).
 
 Run commands below from the repository root on the cloud instance. Use the existing
 main environment (`pip install -r requirements/main.txt` and `pip install -e .`),
@@ -367,7 +429,7 @@ For VisionFM, manually download the official **OCT** encoder from the
 and place it at `weights/VFM_OCT_weights.pth`. The
 [upstream weights table](https://github.com/ABILab-CUHK/VisionFM#31-download-the-pretrained-weights-of-visionfm)
 is the source of that link. Release bytes have **not** been downloaded or inspected
-in this session. The preset explicitly assumes a **raw backbone state dict**
+in this checkout. The preset explicitly assumes a **raw backbone state dict**
 (`checkpoint_key: null`). If your file is wrapped, explicitly select `teacher`,
 `student`, or `visionfm_state_dict` using `encoder.checkpoint_key`. The loader does
 not guess from filenames. Missing wrapper keys, unknown tensors, incomplete backbones
@@ -456,14 +518,14 @@ attention has no CUDA requirement. The unmodified pinned source is an offline
 test oracle. Docker's build context includes both new preset head/finetune output
 directories. Mount custom run paths or explicitly include them in `.dockerignore`.
 
-Verification in this session was **static only**: no training, inference, model
-loading/construction, forwards/backwards, optimizer steps, pytest runs or pretrained
-binary downloads. Regression tests are written for later cloud/CI execution:
+Alternative-encoder and fusion model execution remain unvalidated here. The current 31 passing
+artifact-only tests are separate from the following model checks, written for later cloud/CI execution:
 
 ```bash
 # These commands RUN CPU models: execute only when ready on the cloud/CI machine.
 python -m pytest tests/test_encoder.py tests/test_partial.py tests/test_store_features.py \
-  tests/test_heads_training.py tests/test_infer.py tests/test_images.py tests/test_alternative_encoders.py
+  tests/test_heads_training.py tests/test_infer.py tests/test_images.py tests/test_alternative_encoders.py \
+  tests/test_fusion_models.py
 ```
 
 New tests use offline random fixtures: small ConvNeXt and one-block VisionFM.

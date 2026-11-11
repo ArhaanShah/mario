@@ -2,6 +2,16 @@
 
 Oct 22, 2026 · @Arhaan
 
+## Scope note: Task 1 research scaffold, November 12, 2026
+
+This document is an archival design brief. The current implementation also includes artifact-only
+Task 1 benchmarking, nonlinear fusion and OTHER-gate heads, and a patient inner-selection/fresh-refit
+protocol. See [the benchmark guide](convnext-benchmark.md), [encoder reference](encoders.md) and
+[current runbook status](../RUNBOOK.md#status-what-was-and-was-not-run) for interfaces and commands.
+Scaffolding validation passed 31 artifact-only tests and static checks; no model runs or model execution
+tests were performed for that change. The [notebook evidence report](results/convnext_task1/notebook_evidence.md)
+audits earlier saved real-data outputs without claiming an independent test result or a new architecture gain.
+
 ## Scope note: encoder extension, November 5, 2026
 
 The design below records the original DINOv2 baseline. Its GPU-budget statements and
@@ -13,10 +23,10 @@ of scope. DINO defaults, cache identity payloads and head/partial formats are re
 
 Use [the encoder reference](encoders.md) for the implemented API, strict checkpoint
 formats and configuration fields, and [the runbook](../RUNBOOK.md#alternative-task-1-encoders-convnext-and-visionfm-oct)
-for cloud setup, manual OCT weights and commands. Existing notebook code cells remain
-the DINO baseline; their new markdown examples document the separate fine-tuning CLI.
+for cloud setup, manual OCT weights and commands. For the current notebook sections, including
+alternative-encoder execution cells added later, see [the README](../README.md#interactive-training-dashboard).
 
-For this extension the user requested code/documentation only. Static checks passed;
+For the November 5 extension the user requested code/documentation only. Static checks passed;
 no model construction/loading, CPU/GPU execution, optimizer steps, pytest runs or
 pretrained binaries were downloaded/validated. Runtime tests were written for later
 cloud/CI execution. The original CPU-test instructions below are historical requirements,

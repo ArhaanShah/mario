@@ -4,6 +4,7 @@ __pycache__/
 .venv/
 .pytest_cache/
 .ruff_cache/
+.cache/
 
 # data, caches, weights and run outputs never go in git
 data/

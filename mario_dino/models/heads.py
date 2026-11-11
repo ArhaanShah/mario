@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import torch
 from torch import nn
+from torch.nn import functional as F
 
 
 class Forecaster(nn.Module):  # f_hat = f_t + W_out . GRU(dt, W_in . f_t)
@@ -59,6 +60,38 @@ class SingleHead(nn.Module):  # ablation: logits from f_t alone
         return self.fc(a)
 
 
+class DeltaMLPHead(nn.Module):
+    """Task 1 pair interactions; no change to the encoder's feature contract."""
+
+    def __init__(self, d, hidden=256, p=0.2):
+        super().__init__()
+        self.trunk = nn.Sequential(nn.LayerNorm(5 * d), nn.Linear(5 * d, hidden),
+                                   nn.GELU(), nn.Dropout(p))
+        self.output = nn.Linear(hidden, 4)
+
+    def interactions(self, a, b):
+        return self.trunk(torch.cat([a, b, b - a, (b - a).abs(), a * b], dim=1))
+
+    def forward(self, a, b):
+        return self.output(self.interactions(a, b))
+
+
+class OtherGateHead(DeltaMLPHead):
+    """OTHER vs the conditional progression classes, not an image-quality classifier."""
+
+    def __init__(self, d, hidden=256, p=0.2):
+        super().__init__(d, hidden, p)
+        self.output = nn.Linear(hidden, 3)
+        self.gate = nn.Linear(hidden, 1)
+
+    def forward(self, a, b):
+        h = self.interactions(a, b)
+        gate = self.gate(h)
+        # Log probabilities are valid CE inputs. Stable even for saturated gates.
+        progression = F.logsigmoid(-gate) + F.log_softmax(self.output(h), dim=1)
+        return torch.cat([progression, F.logsigmoid(gate)], dim=1)
+
+
 N_TASK1, N_TASK2 = 4, 3
 
 
@@ -76,8 +109,14 @@ class MarioHeads(nn.Module):
         dropout: float = 0.2,
         forecast_steps: int = 1,
         delta_t0: float = 42.0,
+        fusion: str = "legacy",
+        fusion_hidden: int = 256,
     ):
         super().__init__()
+        if fusion not in ("legacy", "delta_mlp", "other_gate") or fusion_hidden < 1:
+            raise ValueError("invalid fusion architecture or fusion_hidden")
+        if fusion != "legacy" and head_input != "pair":
+            raise ValueError("experimental fusion requires paired Task 1 inputs")
         self.hparams = dict(
             d=d,
             head_input=head_input,
@@ -89,6 +128,10 @@ class MarioHeads(nn.Module):
             forecast_steps=forecast_steps,
             delta_t0=float(delta_t0),
         )
+        # Preserve the exact legacy hyperparameter payload for historical checkpoints.
+        if fusion != "legacy":
+            self.hparams.update(fusion=fusion, fusion_hidden=fusion_hidden)
+        self.fusion = fusion
         self.head_input = head_input
         self.forecast_steps = forecast_steps
         if forecaster == "gru":
@@ -98,7 +141,12 @@ class MarioHeads(nn.Module):
         else:
             raise ValueError(f"unknown forecaster {forecaster!r}")
         if head_input == "pair":
-            self.head: nn.Module = FusionHead(d, N_TASK1, dropout)
+            if fusion == "legacy":
+                self.head: nn.Module = FusionHead(d, N_TASK1, dropout)
+            elif fusion == "delta_mlp":
+                self.head = DeltaMLPHead(d, fusion_hidden, dropout)
+            else:
+                self.head = OtherGateHead(d, fusion_hidden, dropout)
         elif head_input == "ft_only":
             self.head = SingleHead(d, N_TASK1, dropout)
         else:
@@ -121,6 +169,8 @@ class MarioHeads(nn.Module):
         return self.head(f_t, f_next)
 
     def task2_logits(self, f_t: torch.Tensor, dt: torch.Tensor | None = None) -> torch.Tensor:
+        if self.fusion != "legacy":
+            raise ValueError("experimental fusion heads support Task 1 only")
         if self.head_input == "ft_only":
             return self.head(f_t)[:, :N_TASK2]
         if dt is None:

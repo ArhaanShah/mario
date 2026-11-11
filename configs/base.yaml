@@ -3,7 +3,7 @@ seed: 0
 device: auto
 
 # Code uses class indices only; names are for reports.
-# UNCONFIRMED: the usual MARIO reading is below - check it on the challenge page (RUNBOOK open questions).
+# Task 1 names follow the official MARIO definitions; see docs/convnext-benchmark.md.
 class_names:
   task1: [reduced, stable, worsened, other]
   task2: [reduced, stable, worsened]

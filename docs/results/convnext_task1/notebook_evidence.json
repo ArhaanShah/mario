@@ -1,0 +1,180 @@
+{
+  "comparison_cell": 27,
+  "limitations": [
+    "no raw OOF predictions, patient splits, checkpoints or histories in this checkout",
+    "different cohorts: DINOv2 14489 vs ConvNeXt 14491 cases",
+    "best epochs were selected using the folds supplying the reported scores",
+    "no paired inference, uncertainty, individual examples or causal architecture conclusions"
+  ],
+  "matrix_source": "manual transcription of cell 27 embedded figures; rows=true, columns=predicted",
+  "notebook": "notebooks/mario_training_dashboard.ipynb",
+  "notebook_sha256": "06d75c185a704503b5c78619e8570fe0c110e007e8bb1f750723d92eb173e683",
+  "retrained_heads_cell": 29,
+  "runs": {
+    "ConvNeXt embeddings + retrained heads": {
+      "mcc": 0.5902901006633257,
+      "micro_f1": 0.7773790628666069,
+      "n": null,
+      "note": "combined summary only; per-class metrics and row count not independently available",
+      "specificity": 0.902881838274626
+    },
+    "Fine-tuned ConvNeXt": {
+      "confusion_matrix": [
+        [
+          1605,
+          330,
+          174,
+          47
+        ],
+        [
+          559,
+          8010,
+          477,
+          364
+        ],
+        [
+          200,
+          265,
+          1103,
+          62
+        ],
+        [
+          138,
+          524,
+          135,
+          498
+        ]
+      ],
+      "metrics": {
+        "balanced_accuracy": 0.6642248356390522,
+        "macro_f1": 0.6549212314499017,
+        "mcc": 0.5860071300207579,
+        "micro_f1": 0.7739976537160996,
+        "specificity": 0.9025221662791536,
+        "task1_composite": 0.7591311509330276
+      },
+      "n": 14491,
+      "per_class": [
+        {
+          "class": 0,
+          "f1": 0.6891369686560755,
+          "name": "REDUCED",
+          "precision": 0.6414868105515588,
+          "predicted": 2502,
+          "recall": 0.7444341372912802,
+          "support": 2156,
+          "undefined_reasons": {}
+        },
+        {
+          "class": 1,
+          "f1": 0.864124278547926,
+          "name": "STABLE",
+          "precision": 0.8774235951363786,
+          "predicted": 9129,
+          "recall": 0.8512221041445271,
+          "support": 9410,
+          "undefined_reasons": {}
+        },
+        {
+          "class": 2,
+          "f1": 0.6268826371128161,
+          "name": "WORSENED",
+          "precision": 0.5839068290100582,
+          "predicted": 1889,
+          "recall": 0.6766871165644172,
+          "support": 1630,
+          "undefined_reasons": {}
+        },
+        {
+          "class": 3,
+          "f1": 0.43954104148278905,
+          "name": "OTHER",
+          "precision": 0.5128733264675592,
+          "predicted": 971,
+          "recall": 0.38455598455598455,
+          "support": 1295,
+          "undefined_reasons": {}
+        }
+      ]
+    },
+    "Frozen DINOv2": {
+      "confusion_matrix": [
+        [
+          1226,
+          385,
+          262,
+          282
+        ],
+        [
+          1185,
+          6240,
+          803,
+          1182
+        ],
+        [
+          353,
+          298,
+          721,
+          257
+        ],
+        [
+          193,
+          209,
+          123,
+          770
+        ]
+      ],
+      "metrics": {
+        "balanced_accuracy": 0.5673078167467185,
+        "macro_f1": 0.5121089005887073,
+        "mcc": 0.39756614676523133,
+        "micro_f1": 0.6181931120160121,
+        "specificity": 0.8653033905577722,
+        "task1_composite": 0.6248139403387569
+      },
+      "n": 14489,
+      "per_class": [
+        {
+          "class": 0,
+          "f1": 0.47965571205007823,
+          "name": "REDUCED",
+          "precision": 0.41460940142035846,
+          "predicted": 2957,
+          "recall": 0.5689095127610209,
+          "support": 2155,
+          "undefined_reasons": {}
+        },
+        {
+          "class": 1,
+          "f1": 0.7544432354007979,
+          "name": "STABLE",
+          "precision": 0.8749298934380259,
+          "predicted": 7132,
+          "recall": 0.6631243358129649,
+          "support": 9410,
+          "undefined_reasons": {}
+        },
+        {
+          "class": 2,
+          "f1": 0.40757490107405314,
+          "name": "WORSENED",
+          "precision": 0.3776846516500786,
+          "predicted": 1909,
+          "recall": 0.4426028238182934,
+          "support": 1629,
+          "undefined_reasons": {}
+        },
+        {
+          "class": 3,
+          "f1": 0.40676175382989965,
+          "name": "OTHER",
+          "precision": 0.30911280610196706,
+          "predicted": 2491,
+          "recall": 0.5945945945945946,
+          "support": 1295,
+          "undefined_reasons": {}
+        }
+      ]
+    }
+  }
+}

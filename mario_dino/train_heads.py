@@ -282,6 +282,8 @@ def train_fold(
         dropout=mc.dropout,
         forecast_steps=mc.forecast_steps,
         delta_t0=delta_t0,
+        fusion=mc.fusion,
+        fusion_hidden=mc.fusion_hidden,
     ).to(device)
     common = {"fold": fold, "hparams": heads.hparams, "config": config_to_dict(cfg), "store_meta": store_meta,
               "dt_median_train": dt_median}
@@ -384,6 +386,10 @@ def train_all(
     validation metrics.  It is intended for the notebook dashboard; command-line runs get the same data in
     ``training_progress.jsonl`` under ``train.out_dir``.
     """
+    if cfg.research.protocol != "legacy":
+        raise ValueError("grouped_holdout requires train_finetune; cached fine-tuned features are not permitted")
+    if cfg.model.fusion != "legacy" and cfg.data.task2_train_csvs:
+        raise ValueError("experimental fusion heads support Task 1 only")
     device = resolve_device(cfg.device)
     feats, t1, t2, meta = load_training_data(cfg, store_dir)
     if t1 is None:

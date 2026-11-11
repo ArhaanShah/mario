@@ -75,6 +75,8 @@ class ModelCfg:
     dt_dim: int = 64
     dropout: float = 0.2
     forecast_steps: int = 1
+    fusion: str = "legacy"  # legacy | delta_mlp | other_gate (Task 1 only)
+    fusion_hidden: int = 256
 
 
 @dataclass
@@ -136,6 +138,15 @@ class InferenceCfg:
 
 
 @dataclass
+class ResearchCfg:
+    """Opt-in patient-held-out selection/refit; legacy training stays the default."""
+
+    protocol: str = "legacy"  # legacy | grouped_holdout
+    inner_splits: str | None = None
+    cohort_manifest: str | None = None
+
+
+@dataclass
 class Config:
     seed: int = 0
     device: str = "auto"
@@ -154,6 +165,7 @@ class Config:
     partial: PartialCfg = field(default_factory=PartialCfg)
     inference: InferenceCfg = field(default_factory=InferenceCfg)
     finetune: FinetuneCfg = field(default_factory=FinetuneCfg)
+    research: ResearchCfg = field(default_factory=ResearchCfg)
 
 
 class ConfigError(ValueError):
@@ -274,6 +286,23 @@ def config_to_dict(cfg: Config) -> dict:
 
 
 def validate(cfg: Config) -> None:
+    if cfg.model.fusion not in ("legacy", "delta_mlp", "other_gate") or cfg.model.fusion_hidden < 1:
+        raise ConfigError("invalid model.fusion or model.fusion_hidden")
+    if cfg.model.fusion != "legacy":
+        if cfg.model.head_input != "pair" or cfg.data.task2_train_csvs:
+            raise ConfigError("experimental fusion requires pair inputs and no Task 2 training CSVs")
+    rc = cfg.research
+    if rc.protocol not in ("legacy", "grouped_holdout"):
+        raise ConfigError("research.protocol must be legacy or grouped_holdout")
+    if rc.protocol == "grouped_holdout":
+        if not rc.inner_splits or not rc.cohort_manifest:
+            raise ConfigError("grouped_holdout requires saved inner_splits and cohort_manifest")
+        if cfg.encoder.kind != "convnext" or cfg.data.n_folds != 4 or cfg.data.task2_train_csvs:
+            raise ConfigError("the research protocol requires four-fold ConvNeXt Task 1 training")
+        if not cfg.encoder.weights:
+            raise ConfigError("the research protocol requires a local pretrained ConvNeXt source")
+        if cfg.train.select_metric != "mcc" or cfg.finetune.init_heads_from or cfg.finetune.max_steps:
+            raise ConfigError("the research protocol requires MCC, fresh heads and uncapped epochs")
     if cfg.preprocess.mode not in MODES:
         raise ConfigError(f"preprocess.mode must be one of {MODES}, got {cfg.preprocess.mode!r}")
     ec = cfg.encoder

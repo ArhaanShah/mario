@@ -164,6 +164,8 @@ def train_partial_fold(
 
 
 def train_all_partial(cfg: Config, folds: list[int] | None = None) -> dict:
+    if cfg.research.protocol != "legacy" or cfg.model.fusion != "legacy":
+        raise ValueError("experimental fusion and research selection/refit require train_finetune")
     if cfg.encoder.kind != "dinov2":
         raise ValueError("train_partial requires DINOv2 prefix tokens; use train_finetune for other encoders")
     device = resolve_device(cfg.device)

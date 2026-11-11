@@ -54,6 +54,10 @@ def predict_pairs(net, dataset, rows, cfg, device):
 
 
 def train_all_finetune(cfg, folds=None):
+    if cfg.research.protocol == "grouped_holdout":
+        from .train_research import train_research
+
+        return train_research(cfg, folds)
     if cfg.encoder.kind not in ("convnext", "visionfm"):
         raise ValueError("train_finetune supports convnext and visionfm; use train_partial for DINOv2")
     device = resolve_device(cfg.device)
@@ -94,7 +98,8 @@ def train_all_finetune(cfg, folds=None):
         median = float(np.median(gaps[tr]))
         heads = MarioHeads(encoder.out_dim, mc.head_input, mc.forecaster, mc.hidden, mc.dt_dim,
                            median, mc.dropout, mc.forecast_steps,
-                           cfg.train.delta_t0 if cfg.train.delta_t0 is not None else median)
+                           cfg.train.delta_t0 if cfg.train.delta_t0 is not None else median,
+                           fusion=mc.fusion, fusion_hidden=mc.fusion_hidden)
         if fc.init_heads_from:
             path = os.path.join(fc.init_heads_from, f"fold{k}", "task1.pt")
             initial, source = load_heads_checkpoint(path)
