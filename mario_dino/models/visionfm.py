@@ -1,10 +1,12 @@
 """Strict VisionFM checkpoint import and differentiable final-normalized CLS adapter."""
 import argparse
 import contextlib
+import importlib
 import math
 import pickle
 from collections.abc import Mapping
 
+import numpy as np
 import torch
 from torch import nn
 
@@ -16,15 +18,29 @@ log = get_logger(__name__)
 
 def load_visionfm_file(path, checkpoint_key=None):
     # Upstream pretraining saves argparse.Namespace under "args", beside teacher/student.
-    # Permit that known metadata class without unrestricted pickle fallback.
+    # Permit known metadata classes without unrestricted pickle fallback.
     safe_globals = getattr(torch.serialization, "safe_globals", None)
-    ctx = safe_globals([argparse.Namespace]) if checkpoint_key and safe_globals else contextlib.nullcontext()
+    if checkpoint_key and safe_globals:
+        try:
+            multiarray = importlib.import_module("numpy._core.multiarray")
+        except ModuleNotFoundError:
+            multiarray = importlib.import_module("numpy.core.multiarray")
+        allowed = [
+            argparse.Namespace,
+            multiarray.scalar,
+            (multiarray.scalar, "numpy.core.multiarray.scalar"),
+            np.dtype,
+            type(np.dtype(np.float64)),
+        ]
+        ctx = safe_globals(allowed)
+    else:
+        ctx = contextlib.nullcontext()
     try:
         with ctx:
             return torch.load(path, map_location="cpu", weights_only=True)
     except pickle.UnpicklingError as exc:
         raise ValueError("cannot safely read VisionFM checkpoint; select checkpoint_key explicitly and use "
-                         "PyTorch >=2.4 for upstream Namespace metadata, or import a raw backbone state dict") from exc
+                         "PyTorch >=2.4 for upstream metadata, or import a raw backbone state dict") from exc
 
 
 def backbone_state(checkpoint, checkpoint_key=None):

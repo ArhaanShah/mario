@@ -82,7 +82,12 @@ def test_visionfm_formats_are_strict(tmp_path, shallow_visionfm, key):
     prefixed["module.head.last_layer.weight"] = torch.zeros(3, 3)
     prefixed["module.backbone.masked_embed"] = torch.zeros(1, 768)
     import argparse
-    wrapper = {key: prefixed, "args": argparse.Namespace(arch="vit_base", modality="OCT")}
+    wrapper = {
+        key: prefixed,
+        "args": argparse.Namespace(arch="vit_base", modality="OCT"),
+        "ibot_loss": np.float64(0.5),
+        "temperature_dtype": np.dtype(np.float64),
+    }
     torch.save(prefixed if key is None else wrapper, ec.weights)
     ec.checkpoint_key = key
     actual = load_encoder(ec)
